@@ -12,7 +12,10 @@ const allowed = new Set(['version','cpu.status','cpu.evaluate','cpu.getAllRegs',
   'memory.read','memory.read_u32','gpu.buffer.screenshot','gpu.buffer.renderColor']);
 const outputRoot = resolve('build/reference-ppsspp');
 const eventsPath = resolve(outputRoot, process.argv[2] || 'heap-events.jsonl');
-const ws = new WebSocket('ws://127.0.0.1:8672/debugger','debugger.ppsspp.org');
+const port = process.env?.PSPWEB_REFERENCE_PORT || '8672';
+if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)
+  throw new Error('Invalid reference debugger port');
+const ws = new WebSocket(`ws://127.0.0.1:${Number(port)}/debugger`,'debugger.ppsspp.org');
 const pending = new Map();
 let serial = 0, logChain = Promise.resolve();
 ws.addEventListener('message', e => {
@@ -34,7 +37,12 @@ await new Promise((res,rej) => {
 });
 async function request(input) {
   if(!allowed.has(input.event)) throw new Error('Unsupported reference command');
-  const {saveBase64As,saveJSONAs,sendOnly,...wire} = input;
+  const {saveBase64As,savePNGAs,saveJSONAs,sendOnly,...wire} = input;
+  const gpuImage = wire.event.startsWith('gpu.buffer.');
+  if (savePNGAs) {
+    if (!gpuImage) throw new Error('savePNGAs requires a GPU buffer command');
+    wire.type = 'uri'; // Protocol base64 is raw pixels, not an encoded image.
+  }
   if (!sendOnly && (wire.event === 'cpu.stepping' || wire.event === 'cpu.resume')) {
     const status = await request({event:'cpu.status'});
     if (status.stepping === (wire.event === 'cpu.stepping')) return status;
@@ -54,12 +62,29 @@ async function request(input) {
     await writeFile(path,JSON.stringify(r,null,2)+'\n');
     return {event:r.event,path};
   }
+  if(savePNGAs) {
+    const path=resolve(outputRoot,savePNGAs);
+    if(!path.startsWith(outputRoot+sep)) throw new Error('Capture must stay in the reference output directory');
+    if(!r.uri?.startsWith('data:image/png;base64,')) throw new Error('No PNG URI in capture response');
+    const bytes=Buffer.from(r.uri.slice('data:image/png;base64,'.length),'base64');
+    if(!bytes.subarray(0,8).equals(Buffer.from('89504e470d0a1a0a','hex')))
+      throw new Error('Invalid PNG signature in capture response');
+    await writeFile(path,bytes);
+    return {event:r.event,path,bytes:bytes.length};
+  }
   if(saveBase64As) {
     const path=resolve(outputRoot,saveBase64As);
     if(!path.startsWith(outputRoot+sep)) throw new Error('Capture must stay in the reference output directory');
     const data=r.base64 || (r.uri?.startsWith('data:') ? r.uri.split(',')[1] : null);
     if(!data) throw new Error('No base64 data in capture response: '+Object.keys(r));
-    const bytes=Buffer.from(data,'base64'); await writeFile(path,bytes);
+    const bytes=Buffer.from(data,'base64');
+    if(gpuImage && r.base64 && /\.png$/i.test(path))
+      throw new Error('Raw GPU pixels require their format metadata; use savePNGAs for PNG');
+    await writeFile(path,bytes);
+    if(gpuImage) {
+      const {base64,uri,...metadata}=r;
+      await writeFile(path+'.json',JSON.stringify(metadata,null,2)+'\n');
+    }
     return {event:r.event,path,bytes:bytes.length};
   }
   return r;

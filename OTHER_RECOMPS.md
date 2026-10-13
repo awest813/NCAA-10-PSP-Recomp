@@ -42,6 +42,10 @@ Paths are relative to the repository root containing `scripts` and `profile`. Ex
 
 **Distinguish timing quantities.** Vblank cadence, simulation speed, display submission rate, presented FPS and audio sample production are separate. Do not force a game's timing to match a different title's FPS. Measure hot instrumentation itself so diagnostics do not become the performance problem.
 
+**Replay the same graphics input.** A verified PPSSPP GE dump can isolate renderer behavior from CPU progression. Keep original captures local, record title/hash/scene/settings, validate the capture structure, then compare matching outputs. A native window screenshot can supply a reference when debugger readback fails, but retain scaling/crop limitations. Protocol raw pixel base64 needs format/stride/flip metadata; an encoded PNG URI is a different representation.
+
+**Check blend algebra at saturation.** Mapping PSP `2*alpha` to ordinary host source alpha darkens destination modulation. For a zero source contribution, `2*a*D = a*D + a*D` and `(1-2*a)*D = (1-a)*D - a*D` fit normal host blend operands without prematurely clamping the doubled factor. Test alpha above 0.5, inverse factors and state reset. This correction covers that specific algebraic case; it does not establish all PSP blend modes accurate. Depth storage precision also matters: fractional drawing depths that share one integer 16-bit value must compare accordingly.
+
 ## Preparing a useful patch or report
 
 Provide the concrete trigger and observed before/after behavior, the smallest source change, a synthetic regression when feasible, tested platforms/settings and relevant license attribution. State whether the change is general PSP behavior or a title-specific adaptation. Include a repro sequence and compact diagnostic values; share only data suitable for the destination.

@@ -692,6 +692,86 @@ void fog_depth(bool use_gl) {
     }
 }
 
+// Destination-only modulation uses PSP's doubled source-alpha factors.
+// A fixed zero source must still allow destination brightening above 1x.
+void doubled_destination_alpha(bool use_gl) {
+    std::cout << "Doubled alpha tests: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    auto *backend = use_gl ? &gl : nullptr;
+    const std::array<float, 9> data = {8, 8, 0, 56, 8, 0, 32, 56, 0};
+    for (unsigned i=0; i<data.size(); ++i)
+        memory.store32(vertices + i*4u, std::bit_cast<std::uint32_t>(data[i]));
+    DisplayList setup(memory);
+    setup.command(0x9C, 0); setup.command(0x9D, 64); setup.command(0xD2, 3);
+    setup.command(0xD4, 0); setup.command(0xD5, 63 | (63 << 10));
+    setup.command(0x12, (3u << 7u) | (1u << 23u)); setup.run(ge);
+    for (unsigned equation : {0u, 2u}) for (unsigned factor : {6u, 7u})
+    for (unsigned alpha : {0u, 64u, 128u, 192u, 255u}) {
+        DisplayList background(memory);
+        background.command(0x21, 0); background.command(0x55, 0xC08040); background.command(0x58, 255);
+        background.draw(); background.run(ge);
+        DisplayList overlay(memory);
+        overlay.command(0x21, 1); overlay.command(0xDF, 10u | (factor << 4) | (equation << 8));
+        overlay.command(0xE0, 0); overlay.command(0x55, 0xFF00FF); overlay.command(0x58, alpha);
+        overlay.draw(); overlay.run(ge);
+        unsigned expected=0;
+        for (unsigned channel=0; channel<3; ++channel) {
+            const float scale=factor==6 ? 2.0f*alpha/255.0f : 1.0f-2.0f*alpha/255.0f;
+            const auto value=static_cast<unsigned>(std::clamp((64.0f+64.0f*channel)*scale,0.0f,255.0f));
+            expected|=value<<(channel*8);
+        }
+        expect_pixel(memory,backend,expected,1);
+    }
+}
+
+// PSP depth storage compares integer 16-bit values, including fractional
+// drawing-space depths that collapse to the same integer after rasterization.
+void integer_depth(bool use_gl) {
+    std::cout << "Integer depth tests: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    auto *backend = use_gl ? &gl : nullptr;
+    auto geometry = [&](float z) {
+        if (backend) backend->flush();
+        const std::array<float, 9> data = {8, 8, z, 56, 8, z, 32, 56, z};
+        for (unsigned i=0; i<data.size(); ++i)
+            memory.store32(vertices + i*4u, std::bit_cast<std::uint32_t>(data[i]));
+    };
+    DisplayList setup(memory);
+    setup.command(0x9C, 0); setup.command(0x9D, 64); setup.command(0xD2, 3);
+    setup.command(0x9E, 0x100000); setup.command(0x9F, 64);
+    setup.command(0xD4, 0); setup.command(0xD5, 63 | (63 << 10));
+    setup.command(0x12, (3u << 7u) | (1u << 23u));
+    setup.command(0x23, 1); setup.command(0xE7, 0); setup.command(0x58, 255);
+    setup.run(ge);
+    for (float base : {0.0f, 100.0f, 32767.0f, 65534.0f}) {
+        geometry(base + .25f);
+        DisplayList first(memory);
+        first.command(0x55, 0x0000FF); first.command(0xDE, 1);
+        first.draw(); first.run(ge);
+        expect_pixel(memory, backend, 0x0000FF);
+        geometry(base + .75f);
+        DisplayList equal(memory);
+        equal.command(0x55, 0x00FF00); equal.command(0xDE, 2);
+        equal.draw(); equal.run(ge);
+        expect_pixel(memory, backend, 0x00FF00);
+        DisplayList greater(memory);
+        greater.command(0x55, 0xFF0000); greater.command(0xDE, 6);
+        greater.draw(); greater.run(ge);
+        expect_pixel(memory, backend, 0x00FF00);
+        geometry(base + 1.25f);
+        DisplayList next(memory);
+        next.command(0x55, 0xFF0000); next.command(0xDE, 6);
+        next.draw(); next.run(ge);
+        expect_pixel(memory, backend, 0xFF0000);
+    }
+}
+
 struct GlContext {
     EGLDisplay display = EGL_NO_DISPLAY;
     EGLContext context = EGL_NO_CONTEXT;
@@ -728,10 +808,14 @@ int main() {
     lighting_components(false);
     texture_coordinates(false);
     fog_depth(false);
+    integer_depth(false);
+    doubled_destination_alpha(false);
     GlContext context;
     lighting_colors(true);
     lighting_components(true);
     texture_coordinates(true);
     fog_depth(true);
-    std::cout << "GE lighting, texture-coordinate and fog pixel tests passed (software and GLES3)\n";
+    integer_depth(true);
+    doubled_destination_alpha(true);
+    std::cout << "GE lighting, texture-coordinate, fog, integer-depth and doubled-alpha tests passed (software and GLES3)\n";
 }

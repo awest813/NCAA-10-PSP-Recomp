@@ -269,7 +269,7 @@ private:
     std::vector<std::uint32_t> indices_;
     GLint u_target_{}, u_origin_{}, u_tex_{}, u_tex_enable_{}, u_tex_size_{}, u_tex_origin_{}, u_tex_func_{};
     GLint u_tex_alpha_{}, u_tex_double_{}, u_env_{}, u_alpha_test_{}, u_alpha_func_{}, u_alpha_ref_{}, u_alpha_mask_{};
-    GLint u_src_scale_{}, u_clear_{}, u_tex_window_{}, u_tex_clamp_{};
+    GLint u_blend_alpha_to_rgb_{}, u_src_scale_{}, u_clear_{}, u_tex_window_{}, u_tex_clamp_{};
     GLint u_fog_enable_{}, u_fog_color_{};
     GLint u_present_tex_{}, u_present_rect_{}, u_present_origin_{};
     GLuint reinterpret_program_{};

@@ -69,6 +69,7 @@ uniform int u_alpha_func;
 uniform int u_alpha_ref;
 uniform int u_alpha_mask;
 uniform vec3 u_src_scale;
+uniform bool u_blend_alpha_to_rgb;
 uniform bool u_clear;
 uniform vec2 u_tex_window; // PSP texture size when sampling part of a larger surface (else 0)
 uniform vec2 u_tex_clamp;  // 1 = clamp, 0 = repeat, per axis
@@ -92,6 +93,9 @@ bool compare(int f, int a, int b) {
     return a >= b;
 }
 void main() {
+    // The GE stores integer 16-bit depth. Preserve that precision before
+    // comparisons even though the host attachment has 24 depth bits.
+    gl_FragDepth = floor(gl_FragCoord.z * 65535.0) / 65535.0;
     vec4 c = v_color / v_color_w;
     if (u_clear) {
         o_color = c;
@@ -143,6 +147,7 @@ void main() {
         c.rgb = floor((rgb * fog + u_fog_color * (255.0 - fog) + 255.0) / 256.0) / 255.0;
     }
     c.rgb *= u_src_scale;
+    if (u_blend_alpha_to_rgb) c.rgb = vec3(c.a);
     o_color = c;
 }
 )";
@@ -495,6 +500,7 @@ bool GeGl::init() {
     u_alpha_ref_ = glGetUniformLocation(program_, "u_alpha_ref");
     u_alpha_mask_ = glGetUniformLocation(program_, "u_alpha_mask");
     u_src_scale_ = glGetUniformLocation(program_, "u_src_scale");
+    u_blend_alpha_to_rgb_ = glGetUniformLocation(program_, "u_blend_alpha_to_rgb");
     u_clear_ = glGetUniformLocation(program_, "u_clear");
     u_tex_window_ = glGetUniformLocation(program_, "u_tex_window");
     u_tex_clamp_ = glGetUniformLocation(program_, "u_tex_clamp");
@@ -1279,6 +1285,7 @@ void GeGl::apply_state() {
     set_uniform(u_target_, static_cast<float>(surface.stride), static_cast<float>(surface.height), 0.0f, 2);
     set_uniform(u_origin_, static_cast<float>(ox), static_cast<float>(oy), 0.0f, 2);
     set_uniform_int(u_clear_, s.clear ? 1 : 0);
+    set_uniform_int(u_blend_alpha_to_rgb_, 0);
 
     GLuint texture = 0u;
     if (!s.clear && s.texture) texture = texture_for_state(source, source_ox, source_oy);
@@ -1376,8 +1383,18 @@ void GeGl::apply_state() {
     set_enabled(GL_BLEND, cache_.blend, s.blend);
     if (s.blend) {
         bool uses_constant = false;
-        const GLenum src = blend_factor(s.src_factor, true, s.fix_a, uses_constant);
-        const GLenum dst = blend_factor(s.dst_factor, false, s.fix_b, uses_constant);
+        GLenum src = blend_factor(s.src_factor, true, s.fix_a, uses_constant);
+        GLenum dst = blend_factor(s.dst_factor, false, s.fix_b, uses_constant);
+        const bool alpha_modulation = s.src_factor == 10u && (s.fix_a & 0xFFFFFFu) == 0u &&
+            (s.dst_factor == 6u || s.dst_factor == 7u) && (s.equation == 0u || s.equation == 2u);
+        if (alpha_modulation) {
+            // With no source contribution, represent 2*a*D as a*D + a*D.
+            // For (1-2*a)*D use (1-a)*D - a*D. Each operand fits the
+            // host's normalized source range, including a > 0.5.
+            src = GL_DST_COLOR;
+            dst = s.dst_factor == 6u ? GL_SRC_ALPHA : GL_ONE_MINUS_SRC_ALPHA;
+            set_uniform_int(u_blend_alpha_to_rgb_, 1);
+        }
         if (s.src_factor >= 10u && src == GL_ONE && (s.fix_a & 0xFFFFFFu) != 0xFFFFFFu) {
             src_scale[0] = static_cast<float>(s.fix_a & 0xFFu) / 255.0f;
             src_scale[1] = static_cast<float>((s.fix_a >> 8u) & 0xFFu) / 255.0f;
@@ -1399,7 +1416,9 @@ void GeGl::apply_state() {
         }
         static constexpr GLenum equations[6] = {GL_FUNC_ADD, GL_FUNC_SUBTRACT, GL_FUNC_REVERSE_SUBTRACT,
                                                 GL_MIN, GL_MAX, GL_FUNC_ADD};
-        const GLenum equation = equations[std::min(s.equation, 5u)];
+        const GLenum equation = alpha_modulation
+            ? (s.dst_factor == 6u ? GL_FUNC_ADD : GL_FUNC_REVERSE_SUBTRACT)
+            : equations[std::min(s.equation, 5u)];
         if (cache_.blend_eq != equation) {
             glBlendEquation(equation);
             cache_.blend_eq = equation;
