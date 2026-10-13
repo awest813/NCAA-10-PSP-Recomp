@@ -16,6 +16,12 @@ GitHub publication details are in [GITHUB_READY.md](GITHUB_READY.md). The source
 
 This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAssembly. It uses the verified executable and NCAA assets with the inherited PSP web runtime. `NCAA2007` is its internal ELF module name. Both existing build caches select `ncaa10`; do not switch to a God of War corpus to obtain a successful build.
 
+## Latest reference/debug evidence
+
+The user-specified `C:/Users/allen/Downloads/NACC_Football_10_USA_PSP-PSPKiNG` folder was inspected on 2026-10-13. Its ISO exactly matches the project SHA-256. Preserved debug copies and a detailed report are under `build/reference-user-debug-20261013`; the version-6 ULUS10440 GPU dump has 25,773 records with valid decompression/payload bounds, and the symbol/map exports agree on all 25,554 entries. These files contain no CPU allocation history. See [PPSSPP reference evidence](docs/PPSSPP_REFERENCE.md).
+
+A real native Georgia–Georgia Tech window capture is at `build/reference-ppsspp/ncaa-visible-window.png`; it is not a matched UK–FSU comparison. The separate `build/reference-compare-20261013` profile uses model 1 and debugger port 8673. It booted the NCAA ISO; dump replay remains unverified. The existing reference helper still defaults to port 8672. Preserve both active PPSSPP sessions and browser saves; do not label a failed readback or an unrelated scene as rendering equivalence.
+
 ## Latest launcher, ISO, storage and audio audit
 
 The 2026-10-13 follow-up fixes an import/autosave race: imported files now wait for the preceding persistence transaction before entering the filesystem. Exports require restoration and imports to finish, and filesystem read failures are reported instead of being mislabeled as an empty save directory. Unavailable storage blocks imports before mutation. The launcher reports engine aborts and clears guest readiness; local ISO checks show index, title and executable-revision stages, with status reset on retry.
