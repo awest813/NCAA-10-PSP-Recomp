@@ -30,6 +30,11 @@
   main { max-width: 1000px; margin: 0 auto; padding: 24px 16px 40px; }
   h1 { font-size: 18px; margin: 0 0 4px; }
   .sub { color: var(--muted); margin: 0 0 16px; }
+  .disc-loader { padding: 14px; margin: 0 0 16px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+  .disc-loader label { display: block; font-weight: 600; margin-bottom: 8px; }
+  .disc-loader input { max-width: 100%; font: inherit; }
+  .disc-loader p { margin: 8px 0 0; color: var(--muted); }
+  .disc-loader .disc-error { color: var(--err); }
   .screen {
     background: #000; border-radius: 10px; overflow: hidden;
     border: 1px solid var(--border); aspect-ratio: 480 / 272; width: 100%;
@@ -169,6 +174,11 @@
 <main>
   <h1>PSP Web Recomp</h1>
   <p class="sub">PSP games recompiled for the browser, with graphics, audio, controls and local saves.</p>
+  <section id="disc-loader" class="disc-loader" hidden aria-label="Load your game">
+    <label for="disc-file">Load NCAA Football 10</label>
+    <input id="disc-file" type="file" accept=".iso" aria-describedby="disc-message">
+    <p id="disc-message" role="status"></p>
+  </section>
   <div class="screen"><canvas id="canvas" width="480" height="272" oncontextmenu="event.preventDefault()"></canvas></div>
   <div class="bar">
     <span id="status" class="status">Loading…</span>
@@ -238,11 +248,12 @@
   <p class="keys">Controls: arrow keys for the D-pad, Z for ✕, X for ○, A for □, S for △, Q and W for L and R, Enter for Start, Shift for Select, and I/J/K/L for the analog stick. Gamepads work too. F toggles fullscreen.</p>
   <pre id="log"></pre>
 </main>
+<script src="local_iso.js"></script>
 <script>
   var logEl = document.getElementById('log');
   var statusEl = document.getElementById('status');
   // The GE runs on a thread of its own, which needs a cross-origin isolated page.
-  if (!window.crossOriginIsolated) {
+  if (!window.crossOriginIsolated && !window.PSPWEB_LOCAL_ISO) {
     statusEl.textContent = 'This page has to be served with the Cross-Origin-Opener-Policy and ' +
       'Cross-Origin-Embedder-Policy headers (scripts/serve.py does this).';
     statusEl.className = 'status err';
@@ -284,6 +295,10 @@
     canvas: document.getElementById('canvas'),
     // ?profile: per-frame timing breakdown in the log (see README).
     preRun: [mountSaves, function () {
+      if (window.PSPWEB_LOCAL_ISO) PspLocalIso.install({
+        Module: Module, FS: FS, addRunDependency: addRunDependency,
+        removeRunDependency: removeRunDependency, document: document, config: window.PSPWEB_LOCAL_ISO
+      });
       // Override the title's RAM default (NCAA: 64 MiB; ?ram=32 for comparison).
       var ram = new URLSearchParams(location.search).get('ram');
       if (ram !== null) ENV.PSPWEB_RAM_MB = ram;

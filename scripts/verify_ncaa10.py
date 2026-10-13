@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import struct
 
+EXPECTED_EBOOT_SHA256 = '2b743dc6d746d822969a9b967b13422a369ff03c6a3a3e2604e051c1642b94f6'
+
 
 def read_sfo(path):
     data = path.read_bytes()
@@ -29,7 +31,7 @@ def main():
         raise ValueError(f'This port requires US NCAA Football 10 (ULUS10440): {metadata}')
     eboot = (args.root / 'EBOOT.BIN').read_bytes()
     digest = hashlib.sha256(eboot).hexdigest()
-    if digest != '2b743dc6d746d822969a9b967b13422a369ff03c6a3a3e2604e051c1642b94f6':
+    if digest != EXPECTED_EBOOT_SHA256:
         raise ValueError(f'Unexpected decrypted executable SHA-256: {digest}. Do not link another game against this corpus.')
     print(json.dumps({'title': metadata['TITLE'], 'disc_id': metadata['DISC_ID'],
                       'system_version': metadata.get('PSP_SYSTEM_VER'),

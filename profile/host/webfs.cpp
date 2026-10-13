@@ -15,20 +15,22 @@ extern "C" EMSCRIPTEN_KEEPALIVE void pspweb_chunk_done(std::uint32_t request, co
 
 EM_JS(void, pspweb_js_fetch, (std::uint32_t request, const char *url, double start, double end), {
     const target = UTF8ToString(url);
-    const attempt = (tries) => fetch(target, { headers: { Range: 'bytes=' + start + '-' + end } })
+    const local = Module.pspReadDisc;
+    const attempt = (tries) => (local ? Promise.resolve().then(() => local(target, start, end)) : fetch(target, { headers: { Range: 'bytes=' + start + '-' + end } })
         .then((response) => {
             if (response.status !== 206 && response.status !== 200) throw new Error('HTTP ' + response.status);
-            return response.arrayBuffer();
-        })
+            return response.arrayBuffer().then((buffer) => response.status === 200 ? buffer.slice(start, end + 1) : buffer);
+        }))
         .then((buffer) => {
             const bytes = new Uint8Array(buffer);
+            if (bytes.length !== end - start + 1) throw new Error('Short disc range');
             const pointer = _malloc(bytes.length || 1);
             HEAPU8.set(bytes, pointer);
             _pspweb_chunk_done(request, pointer, bytes.length);
             _free(pointer);
         })
         .catch((error) => {
-            if (tries > 0) return new Promise((r) => setTimeout(r, 500)).then(() => attempt(tries - 1));
+            if (!local && tries > 0) return new Promise((r) => setTimeout(r, 500)).then(() => attempt(tries - 1));
             console.error('[webfs] ' + target + ' ' + start + '-' + end + ': ' + error);
             _pspweb_chunk_done(request, 0, 0);
         });

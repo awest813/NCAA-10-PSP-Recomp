@@ -13,6 +13,7 @@ This guide describes reusable engineering work from the NCAA Football 10 PSP web
 | Memory diagnostics | `ncaa_heap_trace.hpp`, `ncaa_pointer_trace.hpp`, `scripts/analyze_ncaa_heap.py` | Request-linked allocation/free history, last-writer provenance and allocator integrity checks |
 | Rendering | `profile/host/ge.cpp`, `ge_gl.cpp`, `profile/tests/ge.cpp` | Tiny display lists and expected pixels for lighting, texture coordinates, fog and state changes |
 | Browser audio | `profile/web/shell.html`, `scripts/test_web_audio.mjs` | Sample-rate, stereo/chunk, drift, reset and underrun recovery tests |
+| Static hosting and local disc reads | `profile/web/local_iso.js`, `static_bootstrap.js`, `scripts/prepare_static_ncaa.py` | Lazy ISO indexing, revision checks, raw-sector ranges and startup gating; adapt title identity and AOT boot requirements for each port |
 | Input and dialogs | `scripts/test_web_input.mjs`, `test_web_osk.mjs`, host controller/utility tests | Focus-loss release, disconnect, neutral rearm and dialog input suppression fixtures |
 | Save validation | `profile/host/savedata.cpp`, NCAA save manifests | Export/hash/reload procedures that compare observable state across fresh processes |
 | Pacing diagnosis | GE worker and presentation tests, `?profile` timing | Matched scenes separating game CPU, graphics queue, callback gaps and presented frames |

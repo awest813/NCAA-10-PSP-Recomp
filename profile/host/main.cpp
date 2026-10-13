@@ -720,9 +720,11 @@ int main() {
         document.querySelector('h1').textContent = 'NCAA Football 10';
     });
 #endif
-    const bool streamed = std::ifstream("/game/disc.manifest").good();
+    const bool local_iso = EM_ASM_INT({ return Module.pspReadDisc ? 1 : 0; });
+    const char *manifest_path = local_iso ? "/game/local-disc.manifest" : "/game/disc.manifest";
+    const bool streamed = std::ifstream(manifest_path).good();
     if (!start_session("/game/EBOOT.BIN", "/game/disc", "/game/ms0", PSPWEB_GUEST_PATH,
-                       streamed ? "/game/disc.manifest" : "", "disc"))
+                       streamed ? manifest_path : "", "disc"))
         return 1;
     // The GE gets a thread of its own (with the canvas) unless ?threads=0 or the
     // browser cannot draw WebGL2 on an OffscreenCanvas.

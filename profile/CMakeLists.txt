@@ -112,6 +112,7 @@ if(NOT EMSCRIPTEN)
 endif()
 
 if(EMSCRIPTEN)
+    configure_file(web/local_iso.js "${CMAKE_CURRENT_BINARY_DIR}/local_iso.js" COPYONLY)
     if(PSPWEB_PRELOAD_DIR STREQUAL "")
         message(FATAL_ERROR "PSPWEB_PRELOAD_DIR is required for the Emscripten build")
     endif()

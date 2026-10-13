@@ -8,4 +8,6 @@ This NCAA Football 10 web port extends the [PSP Web Recomp runtime](https://gith
 
 Emscripten, ANGLE and the official PPSSPP reference installation are development/runtime dependencies installed separately. Their local SDKs and binaries are excluded from the source snapshot.
 
+`profile/third_party/coi_serviceworker` vendors the unmodified [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) at commit `7b1d2a092d0d2dd2b7270b6f12f13605de26f214`, under the MIT license, copyright 2021 Guido Zuidhof. Its [LICENSE](profile/third_party/coi_serviceworker/LICENSE) and `SOURCE_COMMIT` are retained. Static builds use its same-origin response headers when the host cannot configure cross-origin isolation headers.
+
 Local NCAA disc files, generated translations, game WebAssembly, RAM dumps and savedata are not included. NCAA, EA and Sony marks identify the target and platform; this project has no affiliation or endorsement from them. Source contributions and synthetic tests are distinct from the local game-derived build outputs.
