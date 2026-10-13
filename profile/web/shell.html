@@ -540,6 +540,7 @@
     '      while (this.frames > 44100 * 0.25 && this.queue.length > 1) {',
     '        this.frames -= this.queue[0].length / 2 - this.pos; this.queue.shift(); this.pos = 0;',
     '      }',
+    '      if (this.frames > 11025) { this.pos = this.queue[0].length / 2 - 11025; this.frames = 11025; }',
     '    };',
     '  }',
     '  process(inputs, outputs) {',
@@ -559,7 +560,8 @@
     '      left[i] = next ? l + (next[n] - l) * f : l; right[i] = next ? r + (next[n + 1] - r) * f : r;',
     '      this.pos += step;',
     '      this.frames -= Math.floor(this.pos) - whole;',
-    '      if (this.pos * 2 >= chunk.length) { this.pos -= chunk.length / 2; this.queue.shift(); }',
+    '      while (this.queue.length && this.pos * 2 >= this.queue[0].length) { this.pos -= this.queue[0].length / 2; this.queue.shift(); }',
+    '      this.frames = Math.max(0, this.frames);',
     '    }',
     '    return true;',
     '  }',
@@ -886,23 +888,109 @@
     return new Blob(parts.concat(central, [end]), { type: 'application/zip' });
   }
   async function readZip(buffer) {
-    var view = new DataView(buffer), bytes = new Uint8Array(buffer), end = -1, files = [], decoder = new TextDecoder();
+    var limit = 64 * 1024 * 1024, fileLimit = 16 * 1024 * 1024;
+    if (buffer.byteLength > limit) throw new Error('save ZIP exceeds 64 MiB');
+    var view = new DataView(buffer), bytes = new Uint8Array(buffer), end = -1, files = [], decoder = new TextDecoder('utf-8', { fatal: true });
+    function bounds(at, size, ceiling) {
+      if (at < 0 || size < 0 || at + size > ceiling) throw new Error('the ZIP file is truncated or damaged');
+    }
     for (var i = bytes.length - 22; i >= Math.max(0, bytes.length - 65557); i--)
-      if (view.getUint32(i, true) === 0x06054b50) { end = i; break; }
+      if (view.getUint32(i, true) === 0x06054b50 && i + 22 + view.getUint16(i + 20, true) === bytes.length) { end = i; break; }
     if (end < 0) throw new Error('this is not a ZIP file');
-    var count = view.getUint16(end + 10, true), at = view.getUint32(end + 16, true);
+    var count = view.getUint16(end + 10, true), at = view.getUint32(end + 16, true), centralEnd = at + view.getUint32(end + 12, true);
+    if (view.getUint16(end + 4, true) || view.getUint16(end + 6, true) || view.getUint16(end + 8, true) !== count || count > 4096 || centralEnd !== end)
+      throw new Error('split, ZIP64 or oversized save archives are unsupported');
+    bounds(at, centralEnd - at, end);
+    var total = 0, ranges = [];
     for (var n = 0; n < count; n++) {
+      bounds(at, 46, centralEnd);
       if (view.getUint32(at, true) !== 0x02014b50) throw new Error('the ZIP file is damaged');
-      var method = view.getUint16(at + 10, true), packed = view.getUint32(at + 20, true), nameLength = view.getUint16(at + 28, true);
+      var flags = view.getUint16(at + 8, true), method = view.getUint16(at + 10, true), crc = view.getUint32(at + 16, true);
+      var packed = view.getUint32(at + 20, true), size = view.getUint32(at + 24, true), nameLength = view.getUint16(at + 28, true);
+      var entryLength = 46 + nameLength + view.getUint16(at + 30, true) + view.getUint16(at + 32, true);
+      bounds(at, entryLength, centralEnd);
+      if (flags & ~0x80E || view.getUint16(at + 34, true)) throw new Error('encrypted or unsupported save ZIP');
+      total += size;
+      if (size > fileLimit || total > limit) throw new Error('expanded save ZIP is too large');
       var name = decoder.decode(bytes.subarray(at + 46, at + 46 + nameLength)), local = view.getUint32(at + 42, true);
-      at += 46 + nameLength + view.getUint16(at + 30, true) + view.getUint16(at + 32, true);
-      var start = local + 30 + view.getUint16(local + 26, true) + view.getUint16(local + 28, true);
+      bounds(local, 30, view.getUint32(end + 16, true));
+      if (view.getUint32(local, true) !== 0x04034b50 || view.getUint16(local + 6, true) !== flags || view.getUint16(local + 8, true) !== method)
+        throw new Error('save ZIP headers disagree');
+      var localNameLength = view.getUint16(local + 26, true);
+      var start = local + 30 + localNameLength + view.getUint16(local + 28, true);
+      bounds(local, start - local + packed, view.getUint32(end + 16, true));
+      if (decoder.decode(bytes.subarray(local + 30, local + 30 + localNameLength)) !== name ||
+          (!(flags & 8) && (view.getUint32(local + 14, true) !== crc || view.getUint32(local + 18, true) !== packed || view.getUint32(local + 22, true) !== size)))
+        throw new Error('save ZIP headers disagree');
+      ranges.push([local, start + packed]);
+      at += entryLength;
       var data = bytes.slice(start, start + packed);
-      if (method === 8) data = new Uint8Array(await new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).arrayBuffer());
+      if (method === 8) {
+        var reader = new Blob([data]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader(), chunks = [], expanded = 0;
+        try {
+          for (;;) {
+            var chunk = await reader.read();
+            if (chunk.done) break;
+            expanded += chunk.value.byteLength;
+            if (expanded > size) throw new Error('save ZIP expanded size disagrees');
+            chunks.push(chunk.value);
+          }
+        } catch (error) { await reader.cancel().catch(function () {}); throw error; }
+        data = new Uint8Array(expanded);
+        var copied = 0;
+        chunks.forEach(function (chunk) { data.set(chunk, copied); copied += chunk.byteLength; });
+      }
       else if (method !== 0) throw new Error(name + ' uses an unsupported compression method');
+      if (data.length !== size || crc32(data) !== crc) throw new Error(name + ' failed size/CRC verification');
       files.push({ name: name, data: data });
     }
+    if (at !== centralEnd) throw new Error('save ZIP directory size disagrees');
+    ranges.sort(function (a, b) { return a[0] - b[0]; });
+    for (var r = 1; r < ranges.length; ++r)
+      if (ranges[r][0] < ranges[r - 1][1]) throw new Error('save ZIP entries overlap');
     return files;
+  }
+  function saveImportFiles(files) {
+    var targets = new Set(), output = [];
+    files.forEach(function (f) {
+      var name = f.name.replace(/\\/g, '/');
+      var parts = name.replace(/\/$/, '').split('/');
+      if (parts.some(function (part) { return !part || part === '.' || part === '..' || !/^[A-Za-z0-9_.-]+$/.test(part); }))
+        throw new Error('unsafe save ZIP path');
+      var at = parts.map(function (part) { return part.toUpperCase(); }).lastIndexOf('SAVEDATA');
+      if (at >= 0) parts = parts.slice(at + 1);
+      if (parts.length !== 2 || /\/$/.test(name)) return;
+      if (parts[0].length > 63 || parts[1].length > 255) throw new Error('save ZIP name is too long');
+      var target = parts.join('/');
+      if (targets.has(target.toUpperCase())) throw new Error('duplicate save ZIP destination');
+      targets.add(target.toUpperCase());
+      output.push({ name: target, data: f.data });
+    });
+    return output;
+  }
+  function applySaveImport(files) {
+    var before = [], directories = [], saves = new Set();
+    function rollback() {
+      before.slice().reverse().forEach(function (f) {
+        if (f.existed) FS.writeFile(f.path, f.data);
+        else if (FS.analyzePath(f.path).exists) FS.unlink(f.path);
+      });
+      directories.slice().reverse().forEach(function (dir) { FS.rmdir(dir); });
+    }
+    try {
+      files.forEach(function (f) {
+        var path = SAVE_ROOT + '/' + f.name, dir = path.slice(0, path.lastIndexOf('/'));
+        var existed = FS.analyzePath(path).exists;
+        before.push({ path: path, existed: existed, data: existed ? FS.readFile(path) : null });
+        if (!FS.analyzePath(dir).exists) { FS.mkdirTree(dir); directories.push(dir); }
+        FS.writeFile(path, f.data);
+        saves.add(f.name.split('/')[0]);
+      });
+    } catch (error) {
+      rollback();
+      throw error;
+    }
+    return { count: saves.size, rollback: rollback };
   }
   document.getElementById('export-saves').addEventListener('click', function () {
     var files = [];
@@ -915,28 +1003,32 @@
     setTimeout(function () { URL.revokeObjectURL(link.href); }, 10000);
   });
   var importInput = document.getElementById('import-file');
+  var importBusy = false;
   document.getElementById('import-saves').addEventListener('click', function () { importInput.click(); });
   importInput.addEventListener('change', async function () {
+    if (importBusy) return;
     var file = importInput.files[0];
     importInput.value = '';
     if (!file) return;
+    importBusy = true;
+    document.getElementById('import-saves').disabled = true;
     try {
-      var saves = {}, written = 0;
-      (await readZip(await file.arrayBuffer())).forEach(function (f) {
-        var parts = f.name.replace(/\\/g, '/').split('/').filter(Boolean);
-        var at = parts.map(function (part) { return part.toUpperCase(); }).lastIndexOf('SAVEDATA');
-        if (at >= 0) parts = parts.slice(at + 1);
-        if (parts.length !== 2 || /\/$/.test(f.name)) return;
-        FS.mkdirTree(SAVE_ROOT + '/' + parts[0]);
-        FS.writeFile(SAVE_ROOT + '/' + parts[0] + '/' + parts[1], f.data);
-        saves[parts[0]] = true;
-        written++;
-      });
-      storeSaves();
-      var count = Object.keys(saves).length;
-      note(count ? 'Imported ' + count + (count === 1 ? ' save' : ' saves') + ' (' + written + ' files)' : 'No saves found in that file');
+      if (!Module.pspReady) throw new Error('wait for game startup before importing saves');
+      if (file.size > 64 * 1024 * 1024) throw new Error('save ZIP exceeds 64 MiB');
+      var files = saveImportFiles(await readZip(await file.arrayBuffer()));
+      var imported = applySaveImport(files);
+      try {
+        if (files.length) await new Promise(function (resolve, reject) { FS.syncfs(false, function (error) { if (error) reject(error); else resolve(); }); });
+      } catch (error) {
+        imported.rollback();
+        throw new Error('browser storage could not save the import; previous files restored. ' + error.message);
+      }
+      note(imported.count ? 'Imported ' + imported.count + (imported.count === 1 ? ' save' : ' saves') + ' (' + files.length + ' files)' : 'No saves found in that file');
     } catch (e) {
       note('Import failed: ' + e.message);
+    } finally {
+      importBusy = false;
+      document.getElementById('import-saves').disabled = false;
     }
   });
 </script>

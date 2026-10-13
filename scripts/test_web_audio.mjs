@@ -96,4 +96,24 @@ for (const rate of [22050, 44100, 48000, 96000]) {
   push(output, 11000);
   assert(output.frames <= 11025, 'excess latency must remain bounded');
 }
-console.log('PASS: focus-loss pad release/startup guard, AudioWorklet stereo/chunk boundaries, 22.05/44.1/48/96 kHz output, ten-second drift, reset/reprime, underrun recovery, queue cap');
+// A low output rate can cross several source chunks in one output sample.
+// Splitting the same stereo ramp must not change resampling or phase.
+for (const rate of [22050, 44100, 48000, 96000]) {
+  const contiguous = new Output({ processorOptions: { rate } });
+  const split = new Output({ processorOptions: { rate } });
+  contiguous.target = split.target = 1;
+  const ramp = Float32Array.from({ length: 2000 }, (_, i) => (i % 2 ? -1 : 1) * Math.floor(i / 2) / 1000);
+  contiguous.port.onmessage({ data: ramp });
+  for (let i = 0; i < ramp.length; i += 2) split.port.onmessage({ data: ramp.slice(i, i + 2) });
+  for (let block = 0; block < 3; ++block) {
+    const expected = render(contiguous), actual = render(split);
+    for (let channel = 0; channel < 2; ++channel) {
+      assert.deepEqual(actual[channel], expected[channel], 'chunking must preserve interpolated stereo samples');
+    }
+    assert.equal(split.frames, contiguous.frames, 'chunking must preserve queued frame accounting');
+  }
+}
+const oversized = new Output({ processorOptions: { rate: 44100 } });
+push(oversized, 30000);
+assert(oversized.frames <= 11025, 'a single oversized chunk must also respect the latency cap');
+console.log('PASS: focus-loss pad release/startup guard, AudioWorklet stereo/chunk boundaries, 22.05/44.1/48/96 kHz output, ten-second drift, reset/reprime, underrun recovery, tiny-chunk ramp continuity, single-chunk queue cap');

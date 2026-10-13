@@ -35,7 +35,9 @@ jobs:
           node scripts/test_web_audio.mjs
           node scripts/test_web_osk.mjs
           node scripts/test_web_input.mjs
+          node scripts/test_web_saves.mjs
           node scripts/test_local_iso.mjs
+          node scripts/test_reference_debugger.mjs
       - name: Reconstruct patched compiler without game data
         run: |
           scripts/setup.sh --no-emsdk

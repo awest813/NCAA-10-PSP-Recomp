@@ -17,8 +17,11 @@ const pending = new Map();
 let serial = 0, logChain = Promise.resolve();
 ws.addEventListener('message', e => {
   const r = JSON.parse(e.data);
-  const p = pending.get(r.ticket);
-  if(p) {pending.delete(r.ticket); clearTimeout(p.timer); p.resolve(r);}
+  // CPU run/step commands complete through unticketed broadcasts, not replies.
+  // Only match broadcasts to commands that explicitly expect that event.
+  const key = r.ticket ?? [...pending].find(([, p]) => p.completion === r.event)?.[0];
+  const p = pending.get(key);
+  if(p) {pending.delete(key); clearTimeout(p.timer); p.resolve(r);}
   else {
     logChain = logChain.then(() => appendFile(eventsPath,JSON.stringify(r)+'\n'));
     if(r.event === 'cpu.stepping' || r.event === 'error')
@@ -32,11 +35,17 @@ await new Promise((res,rej) => {
 async function request(input) {
   if(!allowed.has(input.event)) throw new Error('Unsupported reference command');
   const {saveBase64As,saveJSONAs,sendOnly,...wire} = input;
+  if (!sendOnly && (wire.event === 'cpu.stepping' || wire.event === 'cpu.resume')) {
+    const status = await request({event:'cpu.status'});
+    if (status.stepping === (wire.event === 'cpu.stepping')) return status;
+  }
   const ticket = `heap-${++serial}`;
   if(sendOnly) {ws.send(JSON.stringify({...wire,ticket})); return {sent:wire.event};}
   const r = await new Promise((resolve,reject)=> {
     const timer=setTimeout(()=>{pending.delete(ticket);reject(new Error('Request timeout: '+wire.event));},10000);
-    pending.set(ticket,{resolve,timer}); ws.send(JSON.stringify({...wire,ticket}));
+    const completion = ['cpu.stepping','cpu.stepInto','cpu.runUntil'].includes(wire.event)
+      ? 'cpu.stepping' : wire.event === 'cpu.resume' ? 'cpu.resume' : null;
+    pending.set(ticket,{resolve,timer,completion}); ws.send(JSON.stringify({...wire,ticket}));
   });
   if(r.event === 'error') throw new Error(r.message);
   if(saveJSONAs) {
@@ -62,8 +71,11 @@ try {
     if(!line.trim())continue;
     try {
       const commands=JSON.parse(line);
-      for(const command of Array.isArray(commands)?commands:[commands])
-        console.log(JSON.stringify(await request(command)));
+      for(const command of Array.isArray(commands)?commands:[commands]) {
+        // A failed capture must not discard the following resume command.
+        try { console.log(JSON.stringify(await request(command))); }
+        catch(e) { console.log(JSON.stringify({error:e.message})); }
+      }
     } catch(e) {console.log(JSON.stringify({error:e.message}));}
   }
 } finally {await logChain; ws.close();}
