@@ -84,7 +84,9 @@ const imported = context.applySaveImport(normalized); assert.equal(imported.coun
 assert(!disk.has(root + '/TEST/DATA.BIN'));
 // Run the actual change handler, including persistence failure and startup guards.
 const input = {files:[],value:'',addEventListener(event,callback) { this.change = callback; }};
-Object.assign(context, {document:{getElementById() { return input; }}, Module:{pspReady:true}, note(text) { notes.push(text); }});
+Object.assign(context, {document:{getElementById() { return input; }}, Module:{pspReady:true}, note(text) { notes.push(text); },
+  savesLoaded:true, saveStatusEl:{textContent:''}, console:{warn() {}}});
+vm.runInContext(html.slice(html.indexOf('  var saveSync ='), html.indexOf('  var savesEl =')),context);
 vm.runInContext(html.slice(html.indexOf('  var importInput ='), html.indexOf('</script>', html.indexOf('  var importInput ='))),context);
 async function upload(bytes) { input.files=[{size:bytes.byteLength, async arrayBuffer() {return array(bytes);}}]; await input.change(); }
 syncError = Error('storage failed'); await upload(valid);

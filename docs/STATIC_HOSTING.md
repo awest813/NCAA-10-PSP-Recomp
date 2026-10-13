@@ -46,11 +46,15 @@ Open `http://127.0.0.1:8623/`. Use localhost or HTTPS; `file://` does not work. 
 
 The selected ISO stays on the device. Reads use `File.slice()` for requested file/sector ranges and feed the existing bounded disc cache; the whole ISO is not loaded into WebAssembly memory or uploaded. Choose the file again after reloading. Saves remain in browser storage for that origin. Export saves before changing domain, port, browser profile or clearing site data.
 
+If browser storage cannot restore saves, startup continues with an on-page warning. Automatic writeback stays disabled for that session to protect unrestored browser data. Export any new in-memory saves before reloading. Failed writes also leave a visible warning; a successful later write clears it. Autosaves and imports share a serialized persistence queue. An export is the backup to keep when storage is unavailable or full.
+
 ## Verification
 
 ```sh
 python scripts/test_static_package.py
 node scripts/test_local_iso.mjs
+node scripts/test_web_saves.mjs
+node scripts/test_web_persistence.mjs
 ```
 
 These synthetic tests cover package integrity and preload coverage, malformed ISO/revision rejection, file and raw-sector ranges, startup gating and the actual JS disc bridge. ISO directory budgets are enforced before reading; unsupported interleaving and records crossing sector boundaries are rejected. Bootstrap tests cover stalled registration, timer/listener cleanup, blocked storage and reload loops. Real game smoke evidence is recorded in [ENGINEERING_LOG.md](../ENGINEERING_LOG.md); a short gameplay pass does not establish every mode or browser combination.

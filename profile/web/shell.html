@@ -185,6 +185,7 @@
     <span id="fps" class="meta"></span>
     <span id="profile" class="meta" hidden></span>
     <span id="note" class="meta"></span>
+    <span id="save-status" class="meta" role="status"></span>
     <span class="actions">
       <select id="scale" aria-label="Resolution" title="Internal resolution">
         <option value="1">480×272</option>
@@ -266,17 +267,27 @@
   }
   var frames = 0, cpuTotal = 0, stepTotal = 0, lastFps = performance.now(), image = null;
   var SAVE_ROOT = '/game/ms0/PSP/SAVEDATA';
+  var saveStatusEl = document.getElementById('save-status'), savesLoaded = false;
   function mountSaves() {
+    var dependency = false, finished = false;
+    function finish(error) {
+      if (finished) return;
+      finished = true;
+      savesLoaded = !error;
+      if (error) {
+        saveStatusEl.textContent = 'Browser saves unavailable. Export saves before closing this page.';
+        console.warn('saves: could not restore browser storage', error);
+      }
+      if (dependency) removeRunDependency('saves');
+    }
     try {
       FS.mkdirTree(SAVE_ROOT);
       FS.mount(IDBFS, {}, SAVE_ROOT);
       addRunDependency('saves');
-      FS.syncfs(true, function (err) {
-        if (err) console.warn('saves: could not read browser storage', err);
-        removeRunDependency('saves');
-      });
+      dependency = true;
+      FS.syncfs(true, finish);
     } catch (e) {
-      console.warn('saves: browser storage is not available', e);
+      finish(e);
     }
   }
   // Which GPU the browser draws with (software renderers make high resolutions slow).
@@ -736,13 +747,29 @@
     clearTimeout(noteTimer);
     noteTimer = setTimeout(function () { noteEl.textContent = ''; }, 6000);
   }
-  var syncTimer = 0;
+  // Autosaves and imports share one queue: IDBFS sync operations must not overlap.
+  var saveSync = Promise.resolve(), syncTimer = 0;
+  function persistSaves() {
+    var operation = saveSync.then(function () {
+      if (!savesLoaded) throw new Error('browser saves were not restored; export saves before reloading');
+      return new Promise(function (resolve, reject) {
+        FS.syncfs(false, function (error) { if (error) reject(error); else resolve(); });
+      });
+    }).then(function () {
+      saveStatusEl.textContent = '';
+    }, function (error) {
+      saveStatusEl.textContent = 'Saves could not be stored. Export saves before closing this page.';
+      console.warn('saves: could not write browser storage', error);
+      throw error;
+    });
+    // A failed write must not poison the next save attempt.
+    saveSync = operation.catch(function () {});
+    return operation;
+  }
   function storeSaves() {
     clearTimeout(syncTimer);
     syncTimer = setTimeout(function () {
-      try {
-        FS.syncfs(false, function (err) { if (err) console.warn('saves: could not write browser storage', err); });
-      } catch (e) {}
+      persistSaves().catch(function () {});
     }, 300);
   }
   Module.pspSavesChanged = storeSaves;
@@ -1018,7 +1045,7 @@
       var files = saveImportFiles(await readZip(await file.arrayBuffer()));
       var imported = applySaveImport(files);
       try {
-        if (files.length) await new Promise(function (resolve, reject) { FS.syncfs(false, function (error) { if (error) reject(error); else resolve(); }); });
+        if (files.length) await persistSaves();
       } catch (error) {
         imported.rollback();
         throw new Error('browser storage could not save the import; previous files restored. ' + error.message);
