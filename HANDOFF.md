@@ -4,17 +4,23 @@ Snapshot: 2026-10-12. Read [ENGINEERING_LOG.md](ENGINEERING_LOG.md) for verified
 
 ## Start here
 
-The actual project is the inner directory:
+For a fresh clone, work from the repository root and follow the [README build instructions](README.md#build-ncaa-from-a-fresh-checkout). The local development paths and session evidence below describe the original machine. Its active game/debug project is the inner directory:
 
 ```text
 C:/Users/allen/Downloads/psp-web-recomp-main/psp-web-recomp-main
 ```
 
-The outer directory is a wrapper. `PSPRecomp/profiles/web` is a junction to this project's `profile` directory. This workspace currently has no Git checkout; preserve existing files and do not assume a clean baseline or reset it.
+The outer directory is a wrapper. `PSPRecomp/profiles/web` is a junction to this project's `profile` directory. The active game/debug directory has no Git checkout; preserve existing files and do not assume a clean baseline or reset it.
 
 GitHub publication details are in [GITHUB_READY.md](GITHUB_READY.md). The source checkout is `build/github-ready-20261012`, with `main` tracking `origin/main` at `awest813/NCAA-10-PSP-Recomp`. The initial audited snapshot was published on 2026-10-12 as [f0a57cb](https://github.com/awest813/NCAA-10-PSP-Recomp/commit/f0a57cb05c295ad56f6effe22313a64b0d31e4e9), and its remote SHA was verified. The manifest beside that folder identifies the preparation baseline; subsequent documentation updates are recorded in Git. The earlier `build/github-ready` is a preliminary audit copy. Seven framework patches now reproduce the relevant local sources from the pinned upstream base, with clean-framework and standalone NCAA codegen tests passing.
 
 This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAssembly. It uses the verified executable and NCAA assets with the inherited PSP web runtime. `NCAA2007` is its internal ELF module name. Both existing build caches select `ncaa10`; do not switch to a God of War corpus to obtain a successful build.
+
+## Latest source audit
+
+The fresh-checkout commands are now in the README and clone this NCAA repository. Bash NCAA generation includes identity checks and EA audio; web preparation includes verified raw UMD data. Windows setup uses a junction and LF framework checkout; the SDK pin matches Emscripten 6.0.10. `scripts/test_source_workflow.py` provides seven game-free ISO/ZIP/error regressions. `.github/workflows/source-checks.yml` checks source, browser helpers and the patched compiler without game data.
+
+The existing Windows NCAA web target was rebuilt successfully with the updated script. All ten host suites, three browser scripts, clean framework tests and standalone NCAA codegen tests passed. Production instruction-trace settings remain empty. See the engineering log and local `build/ncaa-source-polish-audit.json` for evidence and limitations. Saves and the existing paused gameplay session were preserved.
 
 ## Current working baseline
 
@@ -26,7 +32,7 @@ This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAs
 
 ## Verify, build and serve
 
-Run these commands from the inner project. Use installed tools on another machine; the explicit paths below describe this machine.
+Run these commands from the active game/debug project. Use installed tools on another machine; the explicit paths below describe this machine.
 
 ```powershell
 C:/Python314/python.exe scripts/verify_ncaa10.py games/ncaa10/root

@@ -41,6 +41,9 @@ for path, lba, size in sorted(files, key=lambda e: e[1]):
     with open(dst, 'wb') as o:
         left = size
         while left:
-            chunk = f.read(min(left, 1 << 20)); o.write(chunk); left -= len(chunk)
+            chunk = f.read(min(left, 1 << 20))
+            if not chunk:
+                raise EOFError(f'Truncated ISO while extracting {path}: {left} bytes missing')
+            o.write(chunk); left -= len(chunk)
     total += size
 print(f'extracted {len(files)} files, {total >> 20} MB to {out}')

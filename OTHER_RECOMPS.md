@@ -17,7 +17,7 @@ This guide describes reusable engineering work from the NCAA Football 10 PSP web
 | Save validation | `profile/host/savedata.cpp`, NCAA save manifests | Export/hash/reload procedures that compare observable state across fresh processes |
 | Pacing diagnosis | GE worker and presentation tests, `?profile` timing | Matched scenes separating game CPU, graphics queue, callback gaps and presented frames |
 
-Paths are relative to this project's inner root. Existing synthetic fixtures can be shared with their source/license context. Actual game-derived corpora, disc assets and captured guest RAM are local diagnostic material, not portable test fixtures.
+Paths are relative to the repository root containing `scripts` and `profile`. Existing synthetic fixtures can be shared with their source/license context. Actual game-derived corpora, disc assets and captured guest RAM are local diagnostic material, not portable test fixtures.
 
 ## A practical bring-up sequence
 

@@ -46,6 +46,9 @@ for path in sorted((args.disc / 'PSP_GAME/USRDIR/data/audio/aems').rglob('*')):
                 raise ValueError(f'Invalid code range in {path}: {start:x}-{stop:x}')
             programs.setdefault(blob, []).append(f'{path.relative_to(args.disc)}@{bank + start:x}')
 
+if not programs:
+    raise ValueError('No EA audio programs found; supply the complete verified NCAA Football 10 disc.')
+
 manifest = []
 source = ['#include "psprecomp/runtime.hpp"', '#include <bit>', '#include <cmath>',
           '#include <cstdint>', '#include <limits>', 'namespace psprecomp {']

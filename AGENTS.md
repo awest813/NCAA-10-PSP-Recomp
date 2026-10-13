@@ -2,7 +2,7 @@
 
 ## Scope and orientation
 
-The user's instructions take precedence. This project targets **NCAA Football 10 PSP US, ULUS10440, for the web**. Work from this inner directory, not its outer wrapper. Read `HANDOFF.md`, `ENGINEERING_LOG.md`, and relevant sections of `docs/NCAA10.md` before substantive changes; consult `docs/NCAA10-CRASH-PROVENANCE.md` for the allocator/reader issue.
+The user's instructions take precedence. This project targets **NCAA Football 10 PSP US, ULUS10440, for the web**. Work from the repository root containing `scripts` and `profile`. In the original local workspace this is the inner directory, beneath an outer wrapper. Read `HANDOFF.md`, `ENGINEERING_LOG.md`, and relevant sections of `docs/NCAA10.md` before substantive changes; consult `docs/NCAA10-CRASH-PROVENANCE.md` for the allocator/reader issue.
 
 The host runtime is inherited from the God of War web ports. Preserve attribution while keeping NCAA's identity and evidence prominent. `NCAA2007` is the verified Football 10 ELF's internal module name. Do not substitute another game's executable, generated corpus, assets or screenshot.
 
@@ -38,7 +38,7 @@ Do not claim full PSP/render/audio/controller/mode accuracy from a short smoke t
 
 - Preserve local game files, prior diagnostic captures and save exports. Export/hash saves before replacing fixtures; keep baseline and progressed checkpoints identifiable.
 - Reuse a suitable running local server/session. Inspect current UI and savedata before acting on handoff snapshots. Restore temporary test settings.
-- The current workspace has no Git checkout. Do not reset/recreate it or delete local dependencies and generated output under the assumption they are disposable.
+- The original game/debug workspace has no Git checkout; its published source checkout is recorded in `HANDOFF.md`. GitHub clones are ordinary Git repositories. Inspect the actual root and status before Git operations, and preserve local dependencies, generated output and game state.
 - Append dated engineering entries for meaningful changes, with reason, checks, artifact paths and unresolved limitations. Update the handoff to the latest reproducible state.
 - Keep `README.md` focused on NCAA; label upstream history and performance evidence by title.
 - Share reusable source fixes, synthetic fixtures and measured reports. Keep local disc assets, generated game translations, game binaries and RAM/save dumps out of source contributions. Preserve third-party licenses.

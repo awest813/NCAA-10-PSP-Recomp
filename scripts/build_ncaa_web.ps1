@@ -4,7 +4,7 @@ param(
     [string]$Emsdk = "$env:USERPROFILE/emsdk",
     [string]$Python = "python",
     [string]$CMake = "cmake",
-    [int]$Jobs = 4,
+    [ValidateRange(1, 256)][int]$Jobs = 4,
     [switch]$Generate,
     [switch]$Serve,
     [int]$Port = 8621
@@ -18,12 +18,17 @@ function Run([string]$Program, [string[]]$Arguments) {
 Push-Location $Root
 try {
     $Iso = (Resolve-Path -LiteralPath $Iso).Path
+    $Emsdk = (Resolve-Path -LiteralPath $Emsdk).Path
+    if (-not (Test-Path "$Emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake")) {
+        throw 'Emscripten toolchain is missing; install and activate the SDK before building.'
+    }
     $GameRoot = Join-Path $Root 'games/ncaa10/root'
     $Disc = Join-Path $GameRoot 'disc'
     if (-not (Test-Path "$Disc/PSP_GAME/PARAM.SFO")) {
         Run $Python @('scripts/extract_iso.py', $Iso, $Disc)
     }
     Run $Python @('scripts/verify_ncaa10.py', $GameRoot)
+    Run $Python @('scripts/prepare_ncaa_disc.py',$Iso,$Disc)
     if (-not (Test-Path 'PSPRecomp/CMakeLists.txt')) { throw 'PSPRecomp source is missing; run the repository setup first.' }
     $Profile = Join-Path $Root 'profile'
     if (-not (Test-Path 'PSPRecomp/profiles/web')) {
@@ -38,9 +43,6 @@ try {
     if (-not (Test-Path 'profile/generated/ncaa10_sound/ncaa_sound.cpp')) {
         Run $Python @('scripts/generate_ncaa_sound.py',$Disc,'build/tools/psp_recomp.exe','profile/generated/ncaa10_sound')
     }
-    $RawDisc = Join-Path $Disc '__umd.iso'
-    if (-not (Test-Path $RawDisc)) { Copy-Item -LiteralPath $Iso -Destination $RawDisc }
-    if ((Get-Item -LiteralPath $RawDisc).Length -ne (Get-Item -LiteralPath $Iso).Length) { throw 'The raw streaming disc has a different size from the source ISO.' }
     Run $Python @('scripts/manifest.py',$Disc,"$GameRoot/disc.manifest")
     $Preload = Join-Path $Root 'games/ncaa10/preload'
     New-Item -ItemType Directory -Force -Path "$Preload/ms0" | Out-Null
@@ -54,7 +56,8 @@ try {
         "-DCMAKE_TOOLCHAIN_FILE=$Emsdk/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake",
         '-DCMAKE_BUILD_TYPE=Release','-DCMAKE_CXX_FLAGS=-fwasm-exceptions -pthread',
         '-DPSPRECOMP_PROFILE=web','-DPSPWEB_GAME=ncaa10','-DPSPWEB_GUEST_PATH=disc0:/PSP_GAME/SYSDIR/EBOOT.BIN',
-        "-DPSPWEB_PRELOAD_DIR=$Preload",'-DPSPRECOMP_BUILD_TESTS=OFF','-DPSPRECOMP_GENERATED_OPT_LEVEL=1','-DPSPWEB_LINK_OPT=0')
+        "-DPSPWEB_PRELOAD_DIR=$Preload",'-DPSPRECOMP_BUILD_TESTS=OFF','-DPSPRECOMP_GENERATED_OPT_LEVEL=1','-DPSPWEB_LINK_OPT=0',
+        '-DPSPWEB_INSTRUCTION_TRACE_UNITS=','-DPSPWEB_INSTRUCTION_TRACE_OPT_LEVEL=')
     Run $CMake @('--build','build/web-ncaa10','--target','pspweb','-j',"$Jobs")
     Write-Host "Built NCAA Football 10: $Root/build/web-ncaa10/profiles/web/index.html"
     if ($Serve) { Run $Python @('scripts/serve.py','build/web-ncaa10/profiles/web',"$Port",'--mount',"/disc=$Disc") }

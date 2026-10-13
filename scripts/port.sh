@@ -45,6 +45,10 @@ fi
 
 echo "== [2/5] executable"
 [ -f "$game/root/EBOOT.BIN" ] || "$here/decrypt.sh" "$disc/PSP_GAME/SYSDIR/EBOOT.BIN" "$game/root/EBOOT.BIN"
+if [ "$name" = ncaa10 ]; then
+  python3 -I "$here/verify_ncaa10.py" "$game/root"
+  python3 -I "$here/prepare_ncaa_disc.py" "$source_path" "$disc"
+fi
 
 echo "== [3/5] MIPS to C++"
 "$here/generate.sh" "$name" "$game/root/EBOOT.BIN"

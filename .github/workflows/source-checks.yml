@@ -1,0 +1,43 @@
+name: Source checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  source-and-compiler:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CC: clang
+      CXX: clang++
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Audit tracked source and script syntax
+        run: |
+          python scripts/check_source_tree.py --tracked
+          python -m compileall -q scripts
+          for script in scripts/*.sh; do bash -n "$script"; done
+      - name: Synthetic source and browser regressions
+        run: |
+          python scripts/test_source_workflow.py
+          node scripts/test_web_audio.mjs
+          node scripts/test_web_osk.mjs
+          node scripts/test_web_input.mjs
+      - name: Reconstruct patched compiler without game data
+        run: |
+          scripts/setup.sh --no-emsdk
+          cmake -S PSPRecomp -B build/tools -DPSPRECOMP_BUILD_TESTS=ON
+          cmake --build build/tools -j 2
+          ctest --test-dir build/tools --output-on-failure
+          python scripts/test_ncaa_codegen.py

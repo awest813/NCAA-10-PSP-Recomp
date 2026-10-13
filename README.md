@@ -6,7 +6,7 @@ The NCAA native and web builds default to **64 MiB guest RAM** with a 56 MiB use
 
 The build checks the disc metadata and exact decrypted executable before linking `profile/generated/ncaa10` and the NCAA audio corpus. The internal module name `NCAA2007` belongs to this verified Football 10 executable. It does not select a different game.
 
-Start in the **inner `psp-web-recomp-main` folder**. Serve the existing build with:
+Run commands from the repository root, where `scripts` and `profile` live. In the original local workspace this is the inner `psp-web-recomp-main` folder. If you already have a build, serve it with:
 
 ```powershell
 python scripts/serve.py build/web-ncaa10/profiles/web 8621 --mount /disc=games/ncaa10/root/disc
@@ -20,11 +20,40 @@ Open <http://127.0.0.1:8621/> and press **Enter for Start**. See the [NCAA guide
 | [Handoff](HANDOFF.md) | Resume the current build, tests, saves and debugging work |
 | [Agent instructions](AGENTS.md) | Rules for future work on this NCAA port |
 | [Helping other recomps](OTHER_RECOMPS.md) | Reusable fixes, test methods and contribution guidance |
-| [GitHub preparation](GITHUB_READY.md) | Source-only snapshot and upload instructions for awest813/NCAA-10-PSP-Recomp |
+| [GitHub publication](GITHUB_READY.md) | Published source, snapshot and contribution instructions for awest813/NCAA-10-PSP-Recomp |
 
 Attribution and dependency licenses are summarized in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-The local workspace contains the supplied game files and generated translations. These are excluded by `.gitignore`; the source project does not distribute them.
+A fresh clone contains source only. Game files, generated translations, build outputs and saves are excluded by `.gitignore`.
+
+## Build NCAA from a fresh checkout
+
+Install Git, Python 3.10 or newer, CMake, Ninja and a C++20 compiler. Windows users need Git Bash for setup and Clang on PATH. Run:
+
+```bash
+git clone https://github.com/awest813/NCAA-10-PSP-Recomp.git
+cd NCAA-10-PSP-Recomp
+bash scripts/setup.sh
+```
+
+Setup fetches the pinned PSPRecomp revision, applies all seven patches, links this profile and installs Emscripten 6.0.10. Supply your own US disc (`ULUS10440`) and the matching decrypted `EBOOT.BIN`; the executable hash is in the [NCAA guide](docs/NCAA10.md#verified-game-identity). Place the decrypted file at `games/ncaa10/root/EBOOT.BIN`, creating those directories first. A retail encrypted executable cannot be used directly.
+
+On Windows, from PowerShell in the repository root:
+
+```powershell
+./scripts/build_ncaa_web.ps1 -Iso 'C:/path/to/NCAA-Football-10.iso' -Emsdk ./tools/emsdk -Generate -Serve
+```
+
+On Linux, from Bash:
+
+```bash
+scripts/port.sh ncaa10 '/path/to/NCAA-Football-10.iso'
+scripts/serve.sh ncaa10 8621
+```
+
+The NCAA path verifies the executable and disc metadata, generates both executable and EA audio code, and prepares the raw UMD image used by sector reads. An ISO or a ZIP containing one ISO is supported. The Bash workflow also accepts an extracted-directory source containing `__umd.iso`. Existing raw images are checked by SHA-256 and preserved on a mismatch. Open <http://127.0.0.1:8621/> and press **Enter for Start**.
+
+Windows gameplay is the verified baseline. Source checks and clean compiler reconstruction have local regression coverage; first-time Linux setup and a full Linux game build still need end-to-end validation. The new GitHub workflow checks source, browser helpers and the patched compiler without game data.
 
 ## Inherited PSP web runtime
 
@@ -40,7 +69,7 @@ The first title brought up this way is God of War: Chains of Olympus. It plays f
 
 God of War: Ghost of Sparta followed through the same scripts. It needed the PSP's DRM decryption for one small file, a handful of system calls and a lighting fix, and no performance work: it runs at 55 to 60 frames per second at three times the native resolution.
 
-For a new source-only checkout, supply your own game files. This local NCAA workspace already has an extracted disc and decrypted executable.
+The original local NCAA workspace already has an extracted disc and decrypted executable. Those files are absent from GitHub clones.
 
 ## How it works
 
@@ -48,7 +77,7 @@ For a new source-only checkout, supply your own game files. This local NCAA work
 
 **A small PSP kernel.** Whatever the game asks of the PSP's operating system is answered by high-level emulation in `profile/host`: cooperative threads with semaphores, event flags and callbacks, memory partitions, the file system (with disc data streamed over HTTP Range requests, so only the executable is downloaded up front), the controller, audio output, saving and loading game progress, message dialogs, and the movie player's bookkeeping. Guest time advances in frames, so a game sees a steady 60 Hz however fast the host runs.
 
-**Graphics.** The GE, the PSP's graphics chip, is fed display lists. `ge.cpp` decodes them on the CPU, including vertex formats, skinning, lighting, texture generation, clipping and backface culling, and hands batched triangles and render state to `ge_gl.cpp`. There, framebuffers become WebGL render targets keyed by their place in VRAM, so effects that render to a texture and read it back stay on the GPU. Pixel format reinterpretation (games read 32-bit buffers as 16-bit textures and back), the PSP's stencil-in-alpha, fog and block transfers are emulated on the GPU as well, and everything can render at one to four times the native 480Ã—272.
+**Graphics.** The GE, the PSP's graphics chip, is fed display lists. `ge.cpp` decodes them on the CPU, including vertex formats, skinning, lighting, texture generation, clipping and backface culling, and hands batched triangles and render state to `ge_gl.cpp`. There, framebuffers become WebGL render targets keyed by their place in VRAM, so effects that render to a texture and read it back stay on the GPU. Pixel format reinterpretation (games read 32-bit buffers as 16-bit textures and back), the PSP's stencil-in-alpha, fog and block transfers are emulated on the GPU as well, and everything can render at one to four times the native 480×272.
 
 **Two threads, like the PSP.** On the PSP the graphics chip works through one frame's display list while the CPU prepares the next, and games are written around that. Here the GE and its WebGL context run on a worker thread with an OffscreenCanvas: queuing a list returns at once and only the explicit sync calls wait. A frame costs whichever thread is busier rather than the sum of both.
 
@@ -64,7 +93,7 @@ In WebAssembly, reading the clock through `std::chrono` goes through `clock_gett
 
 Firefox copies every WebGL buffer upload to its GPU process, and after any change to an index buffer it re-validates the whole buffer on the next draw. A shared 4 MB index ring therefore dropped Firefox to 3 frames per second; giving every draw a small index buffer of its own fixed it. The opposite fix, writing vertex data piece by piece into one large buffer, helped no browser and made phones stall, because mobile GPU drivers wait or copy when a buffer the GPU may still be reading is modified.
 
-The PSP keeps its stencil buffer in the framebuffer's alpha channel, and God of War uses it for projected shadows and to limit a blur pass. Mirroring stencil and alpha into each other with full-screen passes was correct but cost 60 million extra pixels per frame at 4Ã—. Tracking which rectangles, which stencil bits and which constant values actually changed brought that down to about 7 million.
+The PSP keeps its stencil buffer in the framebuffer's alpha channel, and God of War uses it for projected shadows and to limit a blur pass. Mirroring stencil and alpha into each other with full-screen passes was correct but cost 60 million extra pixels per frame at 4×. Tracking which rectangles, which stencil bits and which constant values actually changed brought that down to about 7 million.
 
 Finally, God of War queues each frame's display list and keeps working on the next frame before it waits. Running the GE on its own thread turned the cost of a busy fight from game plus graphics, around 17 ms in Firefox, into the larger of the two, around 10 ms.
 
@@ -79,8 +108,8 @@ The next problem was a white sky, and the menus had the same white haze. Bisecti
 The generic upstream workflow below uses git, CMake, Ninja, a C++20 compiler and Python 3 on Linux. The NCAA port also has a tested Windows workflow in [docs/NCAA10.md](docs/NCAA10.md). macOS remains untested here. The native runner needs EGL and OpenGL ES headers (`libegl-dev` and `libgles-dev` on Debian and Ubuntu); the Windows NCAA build uses ANGLE. Disk requirements depend on the title and generated corpus.
 
 ```bash
-git clone https://github.com/snuri00/psp-web-recomp.git
-cd psp-web-recomp
+git clone https://github.com/awest813/NCAA-10-PSP-Recomp.git
+cd NCAA-10-PSP-Recomp
 scripts/setup.sh                                   # PSPRecomp, the patches and the Emscripten SDK
 
 PSP_DECRYPT=/path/to/decrypter scripts/port.sh mygame "My Game.iso"

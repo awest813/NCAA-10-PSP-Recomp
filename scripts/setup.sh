@@ -7,18 +7,27 @@ set -euo pipefail
 source "$(dirname "$0")/common.sh"
 
 PSPRECOMP_URL="https://github.com/jessicanataliagta/PSPRecomp.git"
-PSPRECOMP_COMMIT="f6e7d41"
-EMSDK_VERSION="6.0.11"
+PSPRECOMP_COMMIT="f6e7d415c7f447b934cc3865a31eb725f353d659"
+# Match the SDK used for the verified NCAA build.
+EMSDK_VERSION="6.0.10"
 
 if [ ! -d "$FRAMEWORK/.git" ]; then
   echo "== fetching PSPRecomp"
-  git clone "$PSPRECOMP_URL" "$FRAMEWORK"
+  git clone -c core.autocrlf=false "$PSPRECOMP_URL" "$FRAMEWORK"
   git -C "$FRAMEWORK" checkout -q -b web "$PSPRECOMP_COMMIT"
   git -C "$FRAMEWORK" -c user.name=setup -c user.email=setup@localhost am -q "$ROOT"/patches/*.patch
 fi
 
 if [ ! -e "$FRAMEWORK/profiles/web" ]; then
-  ln -s ../../profile "$FRAMEWORK/profiles/web"
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      # Git Bash may copy a directory for ln -s. A junction keeps generated
+      # code and later host edits in the same profile used by CMake.
+      PSPWEB_SETUP_ROOT="$(cygpath -w "$ROOT")" powershell.exe -NoProfile -NonInteractive -Command \
+        '$ErrorActionPreference = "Stop"; New-Item -ItemType Junction -Path (Join-Path $env:PSPWEB_SETUP_ROOT "PSPRecomp/profiles/web") -Target (Join-Path $env:PSPWEB_SETUP_ROOT "profile") | Out-Null'
+      ;;
+    *) ln -s ../../profile "$FRAMEWORK/profiles/web" ;;
+  esac
   grep -qx "profiles/web" "$FRAMEWORK/.git/info/exclude" 2>/dev/null || echo "profiles/web" >> "$FRAMEWORK/.git/info/exclude"
 fi
 

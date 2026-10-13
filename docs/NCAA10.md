@@ -28,8 +28,9 @@ exact decrypted executable before the build proceeds:
   NCAA Football 10 executable, not evidence that another game's code was used.
 - Entry `0x08B6EE80`, 258 imports, 234,645 relocations, 335,450 registered entries.
 
-The working project is the inner `psp-web-recomp-main` directory. Its relevant
-folders are:
+Run commands from the repository root containing `scripts` and `profile`.
+In the original development workspace this is the inner `psp-web-recomp-main`
+directory. Fresh clones should start with the [README build instructions](../README.md#build-ncaa-from-a-fresh-checkout). Relevant folders are:
 
 | Folder | Role |
 |---|---|
@@ -53,7 +54,7 @@ python scripts/serve.py build/web-ncaa10/profiles/web 8621 --mount /disc=games/n
 Open <http://127.0.0.1:8621/>. The server supplies the cross-origin isolation
 headers required by the WebAssembly graphics worker and HTTP Range requests
 for the disc. Opening `index.html` directly from the filesystem will not work.
-The server currently running on port 8621 serves this build.
+Port 8621 is the recorded local development origin; check whether a server is running before reusing it.
 
 The executable and manifest are preloaded (about 8.44 MB); the other disc assets
 stream locally as requested. `disc/__umd.iso` backs the game's raw UMD reads.
@@ -96,13 +97,13 @@ scripts/build_ncaa_web.ps1 -Iso "NACC_Football_10_USA_PSP-PSPKiNG.iso" -Serve
 Use `-Emsdk C:/path/to/emsdk` to select another SDK. Add `-Generate` to regenerate
 the full executable corpus and the 22 distinct Allegrex audio programs found
 in 88 EA bank entries. This can take substantially longer than an incremental
-build. The checked-in `patches/0006-ncaa10-vfpu-and-aot-audio.patch` preserves the
-compiler changes for a fresh framework setup; the framework in this folder
-already contains them. Existing generated sources and build products are local
+build. All seven checked-in framework patches are applied by `scripts/setup.sh`,
+including the NCAA compiler fixes in patch 6 and runtime provenance in patch 7.
+The original local framework already contains them. Existing generated sources and build products are local
 and ignored by version control.
 
-The script validates the title, extracts the disc if necessary, prepares the
-streaming image and manifest, packages only the executable/manifest, and links
+The script validates the title, extracts the disc if necessary, verifies the
+raw streaming image by SHA-256 (unpacking ZIP input when needed), writes the manifest, packages only the executable/manifest, and links
 `build/web-ncaa10/profiles/web/index.html`, `.js`, `.wasm`, and `.data`. Link
 optimization is set to zero to avoid a very long whole-corpus wasm-opt pass;
 the generated C++ units are compiled at optimization level one.
