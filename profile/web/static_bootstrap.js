@@ -10,25 +10,31 @@
       if (!globalThis.isSecureContext || !navigator.serviceWorker) {
         throw new Error('Open this site over HTTPS or localhost, with service workers enabled.');
       }
-      if (sessionStorage.getItem(reloadKey)) {
+      let reloaded;
+      try { reloaded = sessionStorage.getItem(reloadKey); } catch (_) {
+        throw new Error('Allow site storage for browser setup, or configure COOP: same-origin and COEP: require-corp headers.');
+      }
+      if (reloaded) {
         throw new Error('This host did not enable browser isolation. Serve COOP: same-origin and COEP: require-corp headers.');
       }
       status.textContent = 'Preparing browser support…';
       const workerURL = new URL('coi-serviceworker.js', location.href).href;
-      await navigator.serviceWorker.register(workerURL, { scope: './' });
-      await Promise.race([
-        new Promise(resolve => {
-          const changed = () => {
+      let timer, changed;
+      try {
+        await new Promise((resolve, reject) => {
+          changed = () => {
             if (navigator.serviceWorker.controller && navigator.serviceWorker.controller.scriptURL === workerURL) {
-              navigator.serviceWorker.removeEventListener('controllerchange', changed);
               resolve();
             }
           };
+          timer = setTimeout(() => reject(new Error('Browser support setup timed out. Reload to retry.')), 15000);
           navigator.serviceWorker.addEventListener('controllerchange', changed);
-          changed();
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('Browser support setup timed out. Reload to retry.')), 15000)),
-      ]);
+          Promise.resolve(navigator.serviceWorker.register(workerURL, { scope: './' })).then(changed, reject);
+        });
+      } finally {
+        clearTimeout(timer);
+        if (changed) navigator.serviceWorker.removeEventListener('controllerchange', changed);
+      }
       sessionStorage.setItem(reloadKey, '1');
       location.reload();
       return;

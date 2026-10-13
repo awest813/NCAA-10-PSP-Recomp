@@ -13,6 +13,7 @@ import shutil
 from verify_ncaa10 import EXPECTED_EBOOT_SHA256, read_sfo
 
 ROOT = Path(__file__).resolve().parent.parent
+SOURCE_URL = 'https://github.com/awest813/NCAA-10-PSP-Recomp/blob/main/'
 
 
 def sha256(path):
@@ -34,6 +35,20 @@ def build_config(game):
                 bootSha256=EXPECTED_EBOOT_SHA256)
 
 
+def package_notices():
+    notices = (ROOT / 'THIRD_PARTY_NOTICES.md').read_text(encoding='utf-8')
+    licenses = {'LICENSE': 'licenses/project-MIT.txt',
+                'profile/third_party/at3_standalone/COPYING.LGPLv2.1': 'licenses/ATRAC-LGPL-2.1.txt',
+                'profile/third_party/coi_serviceworker/LICENSE': 'licenses/coi-serviceworker-MIT.txt'}
+    def link(match):
+        target = match.group(1)
+        return '](' + (target if '://' in target else licenses.get(target, SOURCE_URL + target)) + ')'
+    notices = re.sub(r'\]\(([^)]+)\)', link, notices)
+    return notices.replace(
+        'Local NCAA disc files, generated translations, game WebAssembly, RAM dumps and savedata are not included.',
+        'This static package includes NCAA WebAssembly and verified boot data. Full disc images, extracted disc assets, RAM dumps and savedata are not included.')
+
+
 def package(build, output, config):
     if output.exists():
         raise ValueError('Output already exists; choose a new directory to preserve the earlier package.')
@@ -41,6 +56,8 @@ def package(build, output, config):
     for name in required:
         if not (build / name).is_file():
             raise ValueError(f'Missing web build file: {name}. Rebuild the current NCAA web target first.')
+    if (build / 'local_iso.js').read_bytes() != (ROOT / 'profile/web/local_iso.js').read_bytes():
+        raise ValueError('The built local ISO helper is stale; rebuild the current NCAA web target first.')
     with (build / 'index.wasm').open('rb') as stream:
         if stream.read(8) != b'\0asm\x01\0\0\0':
             raise ValueError('Invalid WebAssembly build.')
@@ -49,7 +66,15 @@ def package(build, output, config):
     if not match:
         raise ValueError('Cannot verify the Emscripten preload metadata for this build.')
     metadata, _ = json.JSONDecoder().raw_decode(javascript, match.start(1))
+    if (not isinstance(metadata, dict) or type(metadata.get('remote_package_size')) is not int
+            or not isinstance(metadata.get('files'), list)
+            or not all(isinstance(item, dict) and isinstance(item.get('filename'), str)
+                       for item in metadata['files'])):
+        raise ValueError('Invalid preload metadata.')
     files = metadata['files']
+    names = [item['filename'] for item in files]
+    if len(set(names)) != len(names):
+        raise ValueError('Duplicate preload filenames could overwrite verified boot data.')
     if any(item['filename'] not in ('/game/EBOOT.BIN', '/game/disc.manifest') for item in files):
         raise ValueError('Preload contains additional game assets or state; use the source-only boot preload.')
     boot = next((item for item in files if item['filename'] == '/game/EBOOT.BIN'), None)
@@ -57,9 +82,16 @@ def package(build, output, config):
         raise ValueError('Incomplete boot preload.')
     size = metadata['remote_package_size']
     for item in files:
-        if not (isinstance(item['start'], int) and isinstance(item['end'], int)
+        if not (type(item.get('start')) is int and type(item.get('end')) is int
                 and 0 <= item['start'] <= item['end'] <= size):
             raise ValueError('Invalid preload file boundaries.')
+    covered = 0
+    for item in sorted(files, key=lambda item: (item['start'], item['end'])):
+        if item['start'] != covered:
+            raise ValueError('Preload coverage contains gaps or overlapping ranges.')
+        covered = item['end']
+    if covered != size:
+        raise ValueError('Preload contains unlisted bytes outside the verified file ranges.')
     with (build / 'index.data').open('rb') as stream:
         stream.seek(boot['start'])
         data = stream.read(boot['end'] - boot['start'])
@@ -93,7 +125,7 @@ def package(build, output, config):
                            ('profile/third_party/at3_standalone/COPYING.LGPLv2.1', 'ATRAC-LGPL-2.1.txt'),
                            ('profile/third_party/coi_serviceworker/LICENSE', 'coi-serviceworker-MIT.txt')]:
         shutil.copy2(ROOT / source, output / 'licenses' / target)
-    shutil.copy2(ROOT / 'THIRD_PARTY_NOTICES.md', output / 'THIRD_PARTY_NOTICES.md')
+    (output / 'THIRD_PARTY_NOTICES.md').write_text(package_notices(), encoding='utf-8', newline='\n')
     (output / 'HOSTING.md').write_text('''# NCAA local-ISO static build
 
 Upload this directory unchanged to a static host over HTTPS. The package works
@@ -113,11 +145,13 @@ disc assets or saves. These build outputs are excluded from the source repo.
 The source, license notices and reconstruction instructions are at:
 https://github.com/awest813/NCAA-10-PSP-Recomp
 
-Local preview with isolation headers:
-python scripts/serve.py build/static-ncaa10 8622
+For a local preview, open a terminal in this package directory and run:
+python -m http.server 8623 --bind 127.0.0.1 --directory .
 
-To test the service-worker fallback without server-added headers:
-python -m http.server 8623 --bind 127.0.0.1 --directory build/static-ncaa10
+Open http://127.0.0.1:8623/ in your browser. This plain static server also
+tests the service-worker fallback without server-added isolation headers.
+For header-enabled preview from the source checkout, use scripts/serve.py
+with the actual package directory path and an available port.
 
 Use localhost/127.0.0.1 for preview; opening the HTML through file:// will fail.
 No /disc mount or backend is required. Do not copy games/ into the host directory.

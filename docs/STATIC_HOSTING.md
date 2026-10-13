@@ -6,7 +6,7 @@ Build the NCAA web target using the [fresh-checkout instructions](../README.md#b
 python scripts/prepare_static_ncaa.py --output build/static-ncaa10
 ```
 
-The packager verifies the NCAA executable, checks the Emscripten preload, and copies only the required web files and notices. Choose a new output directory for each package; it refuses to overwrite an existing one. Optional `--build` and `--game-root` select different local build/input directories. The output must stay below `build/`.
+The packager verifies the NCAA executable, checks the Emscripten preload, and copies only the required web files and notices. Duplicate filenames, overlapping ranges, unlisted bytes and stale local-ISO helpers are rejected. Choose a new output directory for each package; it refuses to overwrite an existing one. Optional `--build` and `--game-root` select different local build/input directories. The output must stay below `build/`.
 
 Upload the **contents** of that directory to an HTTPS static host. Keep `index.html`, `index.js`, `index.wasm`, `index.data`, `local_iso.js`, `static_bootstrap.js`, `coi-serviceworker.js`, notices and licenses together. Root and subdirectory deployments use relative paths. `static-manifest.json` records file sizes and hashes; `HOSTING.md` travels with the package.
 
@@ -53,4 +53,4 @@ python scripts/test_static_package.py
 node scripts/test_local_iso.mjs
 ```
 
-These synthetic tests cover package integrity, refusal to include extra preload assets, malformed ISO/revision rejection, file and raw-sector ranges, startup gating and the actual JS disc bridge. Real game smoke evidence is recorded in [ENGINEERING_LOG.md](../ENGINEERING_LOG.md); a short gameplay pass does not establish every mode or browser combination.
+These synthetic tests cover package integrity and preload coverage, malformed ISO/revision rejection, file and raw-sector ranges, startup gating and the actual JS disc bridge. ISO directory budgets are enforced before reading; unsupported interleaving and records crossing sector boundaries are rejected. Bootstrap tests cover stalled registration, timer/listener cleanup, blocked storage and reload loops. Real game smoke evidence is recorded in [ENGINEERING_LOG.md](../ENGINEERING_LOG.md); a short gameplay pass does not establish every mode or browser combination.

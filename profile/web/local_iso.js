@@ -55,10 +55,10 @@
       }
       const record = (bytes, at, parent) => {
         const n = bytes[at], nameLength = bytes[at + 32];
-        if (n < 34 || at + n > bytes.length || nameLength === 0 || 33 + nameLength > n) fail('Invalid ISO directory record.');
+        if (n < 34 || at + n > bytes.length || at % SECTOR + n > SECTOR || nameLength === 0 || 33 + nameLength > n) fail('Invalid ISO directory record.');
         const view = new DataView(bytes.buffer, bytes.byteOffset + at, n);
         const offset = view.getUint32(2, true) * SECTOR, size = view.getUint32(10, true), flags = bytes[at + 25];
-        if (offset + size > file.size || (flags & 128)) fail('Truncated or unsupported multi-extent ISO.');
+        if (offset + size > file.size || (flags & 128) || bytes[at + 1] || bytes[at + 26] || bytes[at + 27]) fail('Truncated or unsupported multi-extent/interleaved ISO.');
         const rawName = bytes.subarray(at + 33, at + 33 + nameLength);
         if (nameLength === 1 && rawName[0] <= 1) return null;
         if (Array.from(rawName).some(c => c < 32 || c > 126)) fail('Unsupported ISO filename.');
@@ -71,7 +71,7 @@
       const visited = new Set();
       for (let q = 0; q < queue.length; ++q) {
         const directory = queue[q];
-        if (directory.depth > 16 || directory.size > 16 * 1024 * 1024 || disc.stats.indexBytes > 32 * 1024 * 1024 || visited.has(directory.offset)) fail('Invalid or excessively large ISO directory tree.');
+        if (directory.depth > 16 || directory.size > 16 * 1024 * 1024 || disc.stats.indexBytes + directory.size > 32 * 1024 * 1024 || visited.has(directory.offset)) fail('Invalid or excessively large ISO directory tree.');
         visited.add(directory.offset);
         const bytes = await disc.bytes(directory.offset, directory.size);
         for (let at = 0; at < bytes.length;) {

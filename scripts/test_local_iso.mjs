@@ -70,6 +70,31 @@ await assert.rejects(IsoDisc.index(new File([sample.bytes.slice(0, 24 * 2048)], 
 const cycle = sample.bytes.slice();
 new DataView(cycle.buffer).setUint32(20 * 2048 + 34 + 34 + 2, 20, true);
 await assert.rejects(IsoDisc.index(new File([cycle], 'cycle.iso')), /directory tree/);
+const interleaved = sample.bytes.slice();
+interleaved[22 * 2048 + 26] = 1;
+await assert.rejects(IsoDisc.index(new File([interleaved], 'interleaved.iso')), /unsupported/);
+const crossed = sample.bytes.slice();
+new DataView(crossed.buffer).setUint32(16 * 2048 + 166, 4096, true);
+crossed.fill(0, 20 * 2048, 22 * 2048);
+for (let i = 0; i < 59; ++i) crossed.set(record(0, 20, 4096, true), 20 * 2048 + i * 34);
+crossed.set(record('CROSSING.BIN', 24, boot.length), 20 * 2048 + 59 * 34);
+await assert.rejects(IsoDisc.index(new File([crossed], 'cross-sector.iso')), /directory record/);
+const indexedRanges = [];
+const oversized = {size: 96 * 1024 * 1024, slice(start, stop) {
+  indexedRanges.push(stop - start);
+  return {async arrayBuffer() {
+    const bytes = new Uint8Array(stop - start);
+    if (start === 16 * 2048) {
+      bytes.set(sample.bytes.slice(start, stop));
+      new DataView(bytes.buffer).setUint32(166, 16 * 1024 * 1024, true);
+    } else if (start === 20 * 2048) {
+      bytes.set(record('LARGE', 10000, 16 * 1024 * 1024, true));
+    }
+    return bytes.buffer;
+  }};
+}};
+await assert.rejects(IsoDisc.index(oversized), /excessively large/);
+assert.deepEqual(indexedRanges, [2048, 16 * 1024 * 1024], 'enforce the index budget before reading another large directory');
 
 class Element {
   hidden = true; disabled = false; value = ''; textContent = ''; className = ''; files = []; handlers = {};
@@ -116,19 +141,27 @@ console.log('PASS: local ISO indexing/identity/revision, file/raw/tail ranges, m
 // Bootstrap is tested independently of the large game engine: it must gate
 // threaded Wasm until isolation is available, without reload loops.
 const bootstrap = readFileSync(new URL('../profile/web/static_bootstrap.js', import.meta.url), 'utf8');
-async function runBootstrap({isolated = false, secure = true, reloaded = false, storageBlocked = false} = {}) {
+async function runBootstrap({isolated = false, secure = true, reloaded = false, storageBlocked = false, registerStalls = false, registerFails = false} = {}) {
   const status = {}, appended = [], registrations = [];
   let reloads = 0;
-  const worker = {controller: null, addEventListener() {}, removeEventListener() {},
-    async register(url, options) { registrations.push({url, options}); this.controller = {scriptURL: url}; }};
-  const storage = {getItem() {return reloaded ? '1' : null;}, setItem() {},
+  const listeners = new Set(), clearedTimers = [];
+  const worker = {controller: null, addEventListener(_, fn) {listeners.add(fn);}, removeEventListener(_, fn) {listeners.delete(fn);},
+    async register(url, options) {
+      registrations.push({url, options});
+      if (registerStalls) return new Promise(() => {});
+      if (registerFails) throw new Error('Registration denied');
+      this.controller = {scriptURL: url};
+    }};
+  const storage = {getItem() {if (storageBlocked) throw new Error('Storage unavailable'); return reloaded ? '1' : null;}, setItem() {},
     removeItem() {if (storageBlocked) throw new Error('Storage unavailable');}};
   await vm.runInNewContext(bootstrap, {crossOriginIsolated: isolated, isSecureContext: secure,
     document: {currentScript: {dataset: {runtime: 'index.js'}}, getElementById: () => status,
       createElement: () => ({}), body: {appendChild: item => appended.push(item)}},
     location: {pathname: '/ncaa/', href: 'https://example.test/ncaa/', reload() {++reloads;}},
-    navigator: {serviceWorker: worker}, sessionStorage: storage, URL, setTimeout() {}});
-  return {status, appended, registrations, reloads};
+    navigator: {serviceWorker: worker}, sessionStorage: storage, URL,
+    setTimeout(callback) {if (registerStalls) queueMicrotask(callback); return 1;},
+    clearTimeout(id) {clearedTimers.push(id);}});
+  return {status, appended, registrations, reloads, listeners, clearedTimers};
 }
 const direct = await runBootstrap({isolated: true, storageBlocked: true});
 assert.equal(direct.appended[0].src, 'index.js');
@@ -137,8 +170,17 @@ const fallback = await runBootstrap();
 assert.equal(fallback.registrations[0].url, 'https://example.test/ncaa/coi-serviceworker.js');
 assert.equal(fallback.registrations[0].options.scope, './');
 assert.equal(fallback.reloads, 1); assert.equal(fallback.appended.length, 0);
+assert.equal(fallback.listeners.size, 0); assert.deepEqual(fallback.clearedTimers, [1]);
+const timeout = await runBootstrap({registerStalls: true});
+assert.match(timeout.status.textContent, /timed out/);
+assert.equal(timeout.reloads, 0); assert.equal(timeout.appended.length, 0);
+assert.equal(timeout.listeners.size, 0); assert.deepEqual(timeout.clearedTimers, [1]);
+const failedRegistration = await runBootstrap({registerFails: true});
+assert.match(failedRegistration.status.textContent, /Registration denied/);
+assert.equal(failedRegistration.listeners.size, 0); assert.deepEqual(failedRegistration.clearedTimers, [1]);
+assert.match((await runBootstrap({storageBlocked: true})).status.textContent, /Allow site storage/);
 assert.match((await runBootstrap({secure: false})).status.textContent, /HTTPS/);
 const loop = await runBootstrap({reloaded: true});
 assert.equal(loop.reloads, 0); assert.equal(loop.appended.length, 0);
 assert.match(loop.status.textContent, /isolation/);
-console.log('PASS: header-enabled bootstrap, blocked storage, subdirectory worker registration, isolation gating and reload-loop rejection');
+console.log('PASS: header-enabled bootstrap, blocked storage, subdirectory worker registration, isolation gating, stalled/failed registration cleanup and reload-loop rejection');
