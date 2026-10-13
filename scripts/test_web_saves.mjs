@@ -96,4 +96,36 @@ const snapshot = [...disk].map(([path,data]) => [path,[...data]]);
 await upload(corrupt); assert.match(notes.at(-1), /CRC/);
 assert.deepEqual([...disk].map(([path,data]) => [path,[...data]]),snapshot, 'bad archive leaves saves unchanged');
 context.Module.pspReady = false; await upload(valid); assert.match(notes.at(-1), /startup/); assert.equal(syncCalls,2);
-console.log('PASS: browser save ZIP round trips, stored/deflated/descriptors, CRC/bounds/size limits, safe unique paths, write rollback, persistence failure and startup gating');
+context.Module.pspReady = true;
+let releaseAutosave;
+FS.syncfs = (populate,callback) => {assert.equal(populate,false); releaseAutosave=callback;};
+const earlierAutosave = context.persistSaves();
+for (let i=0;i<10;++i) await Promise.resolve();
+const queuedImport = upload(zip(['QUEUED/DATA.BIN']));
+for (let i=0;i<20;++i) await Promise.resolve();
+assert(!disk.has(root+'/QUEUED/DATA.BIN'),'an import must not mutate files inside an earlier autosave transaction');
+FS.syncfs = (populate,callback) => {assert.equal(populate,false); callback(null);};
+releaseAutosave(null); await earlierAutosave; await queuedImport;
+assert(disk.has(root+'/QUEUED/DATA.BIN'));
+context.savesLoaded=false; await upload(valid); assert.match(notes.at(-1),/storage is unavailable/);
+context.savesLoaded=true;
+let exportClick, downloads=0;
+Object.assign(context,{
+  saveRestoreDone:false,
+  document:{getElementById(){return {addEventListener(event,callback){exportClick=callback;}};},
+    createElement(){return {click(){++downloads;}};}},
+  URL:{createObjectURL(){return 'blob:test';},revokeObjectURL(){}},setTimeout(){},
+});
+vm.runInContext(html.slice(html.indexOf("  document.getElementById('export-saves')"),html.indexOf('  var importInput =')),context);
+exportClick(); assert.match(notes.at(-1),/finish loading/); assert.equal(downloads,0);
+context.saveRestoreDone=true; context.importBusy=true;
+exportClick(); assert.match(notes.at(-1),/import to finish/); assert.equal(downloads,0);
+context.importBusy=false;
+FS.readdir=()=>{throw Error('read denied');};
+exportClick(); assert.match(notes.at(-1),/Export failed.*read denied/); assert.equal(downloads,0);
+FS.readdir=()=>[];
+exportClick(); assert.equal(notes.at(-1),'No saves yet');
+FS.readdir=path=>[...new Set([...disk.keys(),...dirs].filter(p=>p.startsWith(path+'/')).map(p=>p.slice(path.length+1).split('/')[0]))];
+FS.stat=path=>({mode:dirs.has(path)?1:0}); FS.isDir=mode=>mode===1;
+exportClick(); assert.equal(downloads,1,'a completed restore can export a consistent snapshot');
+console.log('PASS: save ZIP integrity/limits, safe paths, rollback, persistence errors, import waits for earlier autosaves, startup/storage/export guards and read-error reporting');

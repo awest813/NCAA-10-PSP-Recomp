@@ -116,4 +116,41 @@ for (const rate of [22050, 44100, 48000, 96000]) {
 const oversized = new Output({ processorOptions: { rate: 44100 } });
 push(oversized, 30000);
 assert(oversized.frames <= 11025, 'a single oversized chunk must also respect the latency cap');
-console.log('PASS: focus-loss pad release/startup guard, AudioWorklet stereo/chunk boundaries, 22.05/44.1/48/96 kHz output, ten-second drift, reset/reprime, underrun recovery, tiny-chunk ramp continuity, single-chunk queue cap');
+assert.equal(oversized.over,1);
+assert.equal(oversized.dropped,30000-11025,'count every discarded source frame');
+const trimmed = new Output({ processorOptions: { rate: 48000 } });
+push(trimmed,6000); render(trimmed);
+const remaining = 6000-Math.floor(trimmed.pos);
+assert(trimmed.pos % 1 !== 0,'exercise a fractional resampling position');
+push(trimmed,6000);
+assert.equal(trimmed.frames,6000);
+assert.equal(trimmed.dropped,remaining,'trimming must count source frames, not fractional phase');
+assert.equal(trimmed.over,1);
+
+// Exercise actual context creation and stats delivery with a 48 kHz device.
+// A stalled render thread must not be mistaken for an overproducing guest.
+let clock = 1000, contextOptions;
+const audioScope = {
+  document:{hidden:false}, sound:{context:null,muted:false}, WORKLET:scope.WORKLET,
+  window:{AudioContext:class {
+    constructor(options) {contextOptions=options; this.sampleRate=48000; this.audioWorklet={addModule:async()=>{}};}
+    createGain() {return {gain:{value:0},connect(){}};}
+  },AudioWorkletNode:true},
+  AudioWorkletNode:class {constructor(){this.port={};} connect(gain){return gain;}},
+  URL:{createObjectURL(){return 'blob:test';}},Blob:class {},
+  performance:{now:()=>clock}, console,
+};
+vm.runInNewContext(html.slice(html.indexOf('  function startSound()'),html.indexOf("  ['pointerup'")),audioScope);
+audioScope.startSound(); await Promise.resolve();
+assert.equal(contextOptions.sampleRate,undefined,'use the device graph rate instead of forcing a second conversion');
+assert.equal(contextOptions.latencyHint,'interactive');
+const stats = (received,output) => audioScope.sound.node.port.onmessage({data:{received,output}});
+stats(44100,48000); clock+=1500; stats(88200,96000);
+assert.equal(audioScope.sound.stats.inputHz,29400,'producer rate uses elapsed wall time');
+assert.equal(audioScope.sound.stats.renderHz,32000,'expose missed device deadlines independently');
+clock+=1000; stats(0,0);
+assert.equal(audioScope.sound.stats.inputHz,undefined,'reset counters must not yield negative rates');
+clock+=1000; stats(44100,48000);
+assert.equal(audioScope.sound.stats.inputHz,44100);
+assert.equal(audioScope.sound.stats.renderHz,48000);
+console.log('PASS: focus/startup guards, stereo/chunk boundaries, 22.05/44.1/48/96 kHz, drift, reset/starvation recovery, bounded queue with exact drop counts, device-native graph selection and wall-time producer/render diagnostics');

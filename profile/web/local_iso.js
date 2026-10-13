@@ -46,9 +46,10 @@
       } else this.stats.indexBytes += length;
       return result;
     }
-    static async index(file) {
+    static async index(file, progress = () => {}) {
       if (!file || !integer(file.size) || file.size < 17 * SECTOR || typeof file.slice !== 'function') fail('Choose an uncompressed PSP ISO file.');
       const disc = new IsoDisc(file), pvd = await disc.bytes(16 * SECTOR, SECTOR);
+      progress('Reading disc index…');
       const header = new DataView(pvd.buffer);
       if (pvd[0] !== 1 || text.decode(pvd.subarray(1, 6)) !== 'CD001' || pvd[6] !== 1 || header.getUint16(128, true) !== SECTOR) {
         fail('Choose an uncompressed ISO9660 image. ZIP, CSO and ZSO files are not supported here.');
@@ -88,11 +89,13 @@
       disc.entries.set('__umd.iso', { path: '__umd.iso', offset: 0, size: file.size, directory: false });
       return disc;
     }
-    async verify(config) {
+    async verify(config, progress = () => {}) {
       const metadata = this.entries.get('psp_game/param.sfo'), executable = this.entries.get('psp_game/sysdir/eboot.bin');
       if (!metadata || metadata.directory || metadata.size > 1024 * 1024 || !executable || executable.directory || executable.size > 32 * 1024 * 1024) fail('This ISO is missing the NCAA PSP disc metadata or executable.');
+      progress('Checking NCAA title…');
       const info = sfo(await this.bytes(metadata.offset, metadata.size));
       if (info.DISC_ID !== 'ULUS10440' || !/FOOTBALL 10/i.test(info.TITLE || '')) fail('This build requires NCAA Football 10 PSP US (ULUS10440).');
+      progress('Checking executable revision…');
       const hash = await sha256(await this.bytes(executable.offset, executable.size));
       if (!Array.isArray(config.ebootHashes) || !config.ebootHashes.includes(hash)) fail('This executable revision does not match the NCAA recomp build. Choose the matching US ISO.');
       this.identity = { title: info.TITLE, discId: info.DISC_ID, ebootSha256: hash };
@@ -124,10 +127,13 @@
       if (!file || busy || started) return;
       busy = true;
       input.disabled = true;
+      status.textContent = 'Checking local NCAA ISO…';
+      status.className = 'status';
       message.textContent = 'Checking ' + file.name + '…';
       message.className = '';
       try {
-        const disc = await (await IsoDisc.index(file)).verify(config);
+        const progress = text => { message.textContent = file.name + ' · ' + text; };
+        const disc = await (await IsoDisc.index(file, progress)).verify(config, progress);
         FS.mkdirTree('/game');
         FS.writeFile('/game/local-disc.manifest', disc.manifest());
         Module.pspReadDisc = disc.read.bind(disc);

@@ -267,12 +267,13 @@
   }
   var frames = 0, cpuTotal = 0, stepTotal = 0, lastFps = performance.now(), image = null;
   var SAVE_ROOT = '/game/ms0/PSP/SAVEDATA';
-  var saveStatusEl = document.getElementById('save-status'), savesLoaded = false;
+  var saveStatusEl = document.getElementById('save-status'), savesLoaded = false, saveRestoreDone = false;
   function mountSaves() {
     var dependency = false, finished = false;
     function finish(error) {
       if (finished) return;
       finished = true;
+      saveRestoreDone = true;
       savesLoaded = !error;
       if (error) {
         saveStatusEl.textContent = 'Browser saves unavailable. Export saves before closing this page.';
@@ -303,6 +304,11 @@
   var Module = {
     pspReady: false,
     onRuntimeInitialized: function () { Module.pspReady = true; },
+    onAbort: function () {
+      Module.pspReady = false;
+      statusEl.textContent = 'Game engine could not start. Reload this page to retry.';
+      statusEl.className = 'status err';
+    },
     canvas: document.getElementById('canvas'),
     // ?profile: per-frame timing breakdown in the log (see README).
     preRun: [mountSaves, function () {
@@ -343,7 +349,9 @@
       var el = document.getElementById('profile');
       el.hidden = false;
       if (sound.stats) text += ' | audio ' + Math.round(sound.stats.queued / 44.1) + ' ms queued, ' + sound.stats.under + ' underruns' +
-        (sound.stats.inputHz == null ? '' : ', input ' + (sound.stats.inputHz / 1000).toFixed(1) + ' kHz');
+        ', ' + sound.stats.over + ' overruns (' + Math.round(sound.stats.dropped / 44.1) + ' ms dropped)' +
+        (sound.stats.inputHz == null ? '' : ', input ' + (sound.stats.inputHz / 1000).toFixed(1) + ' kHz, render ' +
+          (sound.stats.renderHz / 1000).toFixed(1) + '/' + (sound.context.sampleRate / 1000).toFixed(1) + ' kHz');
       el.textContent = text;
       if (spike) appendLog('[timing] ' + fpsEl.textContent + ' | ' + text);
     },
@@ -544,20 +552,22 @@
     '    super();',
     '    this.queue = []; this.pos = 0; this.frames = 0; this.primed = false;',
     '    this.base = 44100 / options.processorOptions.rate; this.drift = 0; this.target = 4410; this.under = 0; this.blocks = 0;',
-    '    this.received = 0; this.output = 0;',
+    '    this.received = 0; this.output = 0; this.over = 0; this.dropped = 0;',
     '    this.port.onmessage = (e) => {',
     '      if (e.data.reset) { this.queue = []; this.pos = 0; this.frames = 0; this.primed = false; this.drift = 0; this.received = 0; this.output = 0; return; }',
     '      this.queue.push(e.data); this.frames += e.data.length / 2; this.received += e.data.length / 2;',
+    '      const before = this.frames;',
     '      while (this.frames > 44100 * 0.25 && this.queue.length > 1) {',
-    '        this.frames -= this.queue[0].length / 2 - this.pos; this.queue.shift(); this.pos = 0;',
+    '        this.frames -= this.queue[0].length / 2 - Math.floor(this.pos); this.queue.shift(); this.pos = 0;',
     '      }',
     '      if (this.frames > 11025) { this.pos = this.queue[0].length / 2 - 11025; this.frames = 11025; }',
+    '      if (this.frames < before) { ++this.over; this.dropped += before - this.frames; }',
     '    };',
     '  }',
     '  process(inputs, outputs) {',
     '    const left = outputs[0][0], right = outputs[0][1] || outputs[0][0];',
     '    this.output += left.length;',
-    '    if (++this.blocks % 344 === 0) this.port.postMessage({ queued: this.frames, under: this.under, received: this.received, output: this.output });',
+    '    if (++this.blocks % 344 === 0) this.port.postMessage({ queued: this.frames, under: this.under, over: this.over, dropped: this.dropped, received: this.received, output: this.output });',
     '    if (!this.primed) { if (this.frames < this.target) { left.fill(0); right.fill(0); return true; } this.primed = true; }',
     '    const error = Math.max(-1, Math.min(1, (this.frames - this.target) / this.target));',
     '    this.drift = Math.max(-0.008, Math.min(0.008, this.drift + error * 0.00000025));',
@@ -591,17 +601,24 @@
     }
     var AudioContextClass = window.AudioContext || window.webkitAudioContext;
     if (!AudioContextClass || !window.AudioWorkletNode) return;
-    try { sound.context = new AudioContextClass({ sampleRate: 44100, latencyHint: 'interactive' }); }
+    // Let the device choose its native graph rate; the worklet already resamples
+    // PSP PCM. Forcing 44.1 kHz adds a second resampling stage on 48 kHz devices.
+    try { sound.context = new AudioContextClass({ latencyHint: 'interactive' }); }
     catch (e) { sound.context = new AudioContextClass(); }
     var url = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
     sound.context.audioWorklet.addModule(url).then(function () {
       sound.node = new AudioWorkletNode(sound.context, 'psp-output',
         { outputChannelCount: [2], processorOptions: { rate: sound.context.sampleRate } });
       sound.node.port.onmessage = function (e) {
-        var previous = sound.stats;
+        var previous = sound.stats, now = performance.now();
         sound.stats = e.data;
-        if (previous && e.data.output > previous.output && e.data.received >= previous.received)
-          sound.stats.inputHz = (e.data.received - previous.received) * sound.context.sampleRate / (e.data.output - previous.output);
+        sound.stats.at = now;
+        if (previous && now > previous.at && e.data.output > previous.output && e.data.received >= previous.received) {
+          // Wall time distinguishes producer overproduction from a render
+          // thread that misses device deadlines. Output frames are not a clock.
+          sound.stats.inputHz = (e.data.received - previous.received) * 1000 / (now - previous.at);
+          sound.stats.renderHz = (e.data.output - previous.output) * 1000 / (now - previous.at);
+        }
       };
       sound.gain = sound.context.createGain();
       sound.gain.gain.value = sound.muted ? 0 : 1;
@@ -1020,8 +1037,11 @@
     return { count: saves.size, rollback: rollback };
   }
   document.getElementById('export-saves').addEventListener('click', function () {
+    if (!saveRestoreDone) { note('Wait for browser saves to finish loading'); return; }
+    if (importBusy) { note('Wait for the save import to finish before exporting'); return; }
     var files = [];
-    try { files = saveFiles(SAVE_ROOT, '', []); } catch (e) {}
+    try { files = saveFiles(SAVE_ROOT, '', []); }
+    catch (e) { note('Export failed: ' + e.message); return; }
     if (!files.length) { note('No saves yet'); return; }
     var link = document.createElement('a');
     link.href = URL.createObjectURL(makeZip(files));
@@ -1041,8 +1061,11 @@
     document.getElementById('import-saves').disabled = true;
     try {
       if (!Module.pspReady) throw new Error('wait for game startup before importing saves');
+      if (!savesLoaded) throw new Error('browser storage is unavailable; export in-memory saves before reloading');
       if (file.size > 64 * 1024 * 1024) throw new Error('save ZIP exceeds 64 MiB');
       var files = saveImportFiles(await readZip(await file.arrayBuffer()));
+      // A preceding autosave must finish before imported files enter its view.
+      await saveSync;
       var imported = applySaveImport(files);
       try {
         if (files.length) await persistSaves();

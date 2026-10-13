@@ -41,12 +41,12 @@ Open `http://127.0.0.1:8623/`. Use localhost or HTTPS; `file://` does not work. 
 ## Player flow and saves
 
 1. Open the hosted page and choose an uncompressed NCAA Football 10 PSP US ISO (`ULUS10440`). ZIP, CSO and ZSO are unsupported in the picker.
-2. The loader indexes ISO9660, validates PARAM.SFO and checks the executable revision against the build. An incorrect or unreadable image stays at the picker with an error.
+2. The loader indexes ISO9660, validates PARAM.SFO and checks the executable revision against the build. The page identifies disc indexing, title validation and executable-revision checks as they run. An incorrect or unreadable image stays at the picker with an error and permits another selection.
 3. Press Enter for PSP Start at the title and information screen. Z is Cross, X is Circle; the page lists the remaining controls.
 
 The selected ISO stays on the device. Reads use `File.slice()` for requested file/sector ranges and feed the existing bounded disc cache; the whole ISO is not loaded into WebAssembly memory or uploaded. Choose the file again after reloading. Saves remain in browser storage for that origin. Export saves before changing domain, port, browser profile or clearing site data.
 
-If browser storage cannot restore saves, startup continues with an on-page warning. Automatic writeback stays disabled for that session to protect unrestored browser data. Export any new in-memory saves before reloading. Failed writes also leave a visible warning; a successful later write clears it. Autosaves and imports share a serialized persistence queue. An export is the backup to keep when storage is unavailable or full.
+If browser storage cannot restore saves, startup continues with an on-page warning. Automatic writeback stays disabled for that session to protect unrestored browser data. Export any new in-memory saves before reloading. Failed writes also leave a visible warning; a successful later write clears it. Autosaves and imports share a serialized persistence queue. Imports wait for earlier saves before replacing files. Export requires restoration/import completion and reports read errors; a failed read is not reported as an empty save directory. An export is the backup to keep when storage is unavailable or full.
 
 ## Verification
 

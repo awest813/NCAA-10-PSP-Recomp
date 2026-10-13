@@ -81,4 +81,10 @@ assert.equal(state.writes,before+1,'debounced autosave uses the same persistence
 const failedRestore = boot('failure');
 failedRestore.context.FS.syncfs = () => {throw Error('must not overwrite unrestored browser data');};
 await assert.rejects(failedRestore.context.persistSaves(),/not restored/);
+const abortSource = html.match(/onAbort: function \(\) \{([\s\S]*?)\n    \},/)[1];
+const aborted={Module:{pspReady:true},statusEl:{}};
+vm.runInNewContext(abortSource,aborted);
+assert.equal(aborted.Module.pspReady,false,'a failed engine must stop accepting guest input/imports');
+assert.equal(aborted.statusEl.className,'status err');
+assert.match(aborted.statusEl.textContent,/Reload.*retry/);
 console.log('PASS: browser-save startup dependency cleanup, async restore, persistent errors, serialized writes, retry recovery, autosave debounce and failed-restore write protection');

@@ -52,7 +52,9 @@ function fixture(id = 'ULUS10440') {
   return { bytes, payload, file: new File([bytes], 'NCAA-test.iso') };
 }
 const sample = fixture();
-const disc = await (await IsoDisc.index(sample.file)).verify(config);
+const progress = [];
+const disc = await (await IsoDisc.index(sample.file,stage=>progress.push(stage))).verify(config,stage=>progress.push(stage));
+assert.equal(progress.length,3); assert.match(progress[0],/index/); assert.match(progress[1],/title/); assert.match(progress[2],/revision/);
 assert.equal(disc.identity.discId, 'ULUS10440');
 assert.equal(disc.entries.size, 6);
 assert.match(disc.manifest(), /F \d+ PSP_GAME\/DATA.BIN/);
@@ -110,7 +112,10 @@ assert.equal(dependencies, 1, 'do not boot before a verified ISO is chosen');
 const input = elements.get('disc-file');
 input.files = [fixture('OTHER0000').file]; await input.handlers.change();
 assert.equal(dependencies, 1); assert.equal(input.disabled, false); assert.equal(Module.pspReadDisc, undefined);
-input.files = [sample.file]; await input.handlers.change();
+input.files = [sample.file];
+const retrySelection = input.handlers.change();
+assert.match(elements.get('status').textContent,/Checking local NCAA ISO/,'retry must replace the earlier error status immediately');
+await retrySelection;
 assert.equal(dependencies, 0); assert.equal(input.disabled, true);
 assert.match(written.get('/game/local-disc.manifest'), /__umd.iso/);
 await input.handlers.change(); assert.equal(dependencies, 0, 'startup dependency is released once');
