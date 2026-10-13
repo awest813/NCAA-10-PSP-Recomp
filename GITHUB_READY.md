@@ -1,0 +1,53 @@
+# GitHub upload preparation
+
+Target: [awest813/NCAA-10-PSP-Recomp](https://github.com/awest813/NCAA-10-PSP-Recomp).
+
+On 2026-10-12 the connected GitHub API reported a public, empty repository with default branch `main`. This document prepares local source for that destination; no push or remote file write is part of this preparation.
+
+## What is included
+
+The snapshot includes the NCAA-focused README, engineering/handoff/agent/reuse documents, host/runtime source, synthetic tests, browser shell, scripts, seven framework patches and license notices. The inherited God of War demo media remain clearly labeled upstream history. The original MIT notice and FFmpeg/ATRAC LGPL text, source revision and per-file notices are retained.
+
+`PSPRecomp` is reconstructed from its pinned upstream revision plus `patches/*.patch`; its local checkout is not uploaded. Patch 7 preserves the additional instruction-trace, heartbeat, codegen and synthetic-test work missing from patch 6 alone. The complete series was applied to a clean export of the pinned base, reproducing the corresponding working sources; that clean framework built and passed its tests and the standalone NCAA codegen regression.
+
+## What stays local
+
+`games`, game ISO files, `profile/generated`, `build`, SDK/tool binaries, RAM/trace dumps and memory-stick/save fixtures are excluded. The snapshot is source and documentation, not a playable game download. A fresh user supplies the matching decrypted executable and disc, then generates the AOT corpora. Artifact paths in engineering documents refer to this local workspace and will not exist in a fresh source checkout.
+
+`scripts/check_source_tree.py` uses an explicit file allowlist and checks selected credential patterns without printing matching values. This is a preparation check, not an exhaustive secret-detection guarantee. `--tracked` checks every index entry, including accidentally staged forbidden files.
+
+## Create or refresh the snapshot
+
+From the inner project directory:
+
+```powershell
+python scripts/check_source_tree.py
+python scripts/prepare_github.py --output build/github-ready-20261012
+```
+
+The final prepared snapshot uses `build/github-ready-20261012`; its ZIP and per-file SHA-256 manifest are `build/github-ready-20261012.zip` and `build/github-ready-20261012-manifest.json`. The earlier `build/github-ready` folder is a preliminary audit snapshot. The packager refuses to overwrite an earlier snapshot; use a new output name when refreshing it. It never pushes.
+
+## Review and upload later
+
+The prepared folder can be initialized independently, keeping the active game/debug workspace unchanged:
+
+```powershell
+cd build/github-ready-20261012
+git init -b main
+git remote add origin https://github.com/awest813/NCAA-10-PSP-Recomp.git
+git add .
+$shellFiles = Get-ChildItem scripts -Filter '*.sh' | ForEach-Object { 'scripts/' + $_.Name }
+git update-index --chmod=+x -- $shellFiles
+python scripts/check_source_tree.py --tracked
+git diff --cached --stat
+git diff --cached --check -- . ':(exclude)patches/*.patch'
+git status --short
+```
+
+The prepared Git folder is staged for review, with `origin` pointing to the target repository; it has no commit yet. Skip initialization/remote creation when using that already prepared folder. Patch files are excluded from the ordinary whitespace check because unified-diff context includes intentional spaces; the separate clean-base patch application verifies them.
+
+Review the staged file list and source changes, then create an initial commit using your configured Git identity. Immediately before uploading, recheck the remote: the empty-repository observation can become stale. If another commit now exists, fetch and integrate it rather than overwriting history. When publication is requested, push the reviewed branch with a normal `git push -u origin main`; do not force-push.
+
+On a clean source checkout, use `bash scripts/setup.sh --no-emsdk` to fetch/apply the framework and build native tools. Windows users need a working Git Bash environment for those shell setup scripts. Install/select Emscripten for the web build, supply the verified decrypted EBOOT and disc, and follow [docs/NCAA10.md](docs/NCAA10.md). Regenerate with `scripts/build_ncaa_web.ps1 -Generate` because generated sources are intentionally absent.
+
+GitHub-hosted automation and the full game build have not been run from this new repository. Local clean-framework and synthetic tests provide the current reproducibility evidence; complete first-time Windows/Linux setup and a fresh game build remain additional checks.

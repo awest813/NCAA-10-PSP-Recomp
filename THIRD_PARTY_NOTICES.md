@@ -1,0 +1,11 @@
+# Source attribution and third-party notices
+
+This NCAA Football 10 web port extends the [PSP Web Recomp runtime](https://github.com/snuri00/psp-web-recomp). The original runtime's MIT notice is retained in [LICENSE](LICENSE), including copyright 2026 Samir Nuri. The inherited God of War demo files and runtime history remain attributed to that source project; they are not NCAA gameplay evidence.
+
+[PSPRecomp](https://github.com/jessicanataliagta/PSPRecomp) supplies the static compiler and core runtime under its MIT license, copyright 2026 PSPRecomp contributors. `scripts/setup.sh` fetches the pinned base and applies this project's patches. The fetched framework is excluded from the upload snapshot; its own license remains in that checkout. Patches 1–5 retain their original author metadata; patches 6–7 preserve the local NCAA/compiler/diagnostic changes.
+
+`profile/third_party/at3_standalone` contains PPSSPP's standalone copy of FFmpeg's ATRAC3/ATRAC3+ decoder sources. These retain their per-file notices and GNU LGPL 2.1-or-later licensing. The complete license is [COPYING.LGPLv2.1](profile/third_party/at3_standalone/COPYING.LGPLv2.1), and the source revision is recorded in `profile/third_party/at3_standalone/SOURCE_COMMIT`. See [the third-party README](profile/third_party/README.md) for the small compatibility headers in `at3_shim`. The project-wide MIT license does not replace this decoder license.
+
+Emscripten, ANGLE and the official PPSSPP reference installation are development/runtime dependencies installed separately. Their local SDKs and binaries are excluded from the source snapshot.
+
+Local NCAA disc files, generated translations, game WebAssembly, RAM dumps and savedata are not included. NCAA, EA and Sony marks identify the target and platform; this project has no affiliation or endorsement from them. Source contributions and synthetic tests are distinct from the local game-derived build outputs.
