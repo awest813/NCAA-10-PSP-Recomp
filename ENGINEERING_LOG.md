@@ -90,3 +90,9 @@ Added `patches/0007-runtime-instruction-provenance.patch` to preserve framework 
 Added publication allowlist/credential-pattern checks, a non-overwriting source packager, LF attributes, broader local-output exclusions, third-party notices and `GITHUB_READY.md`. The preliminary 126-file source snapshot passed the audit and all three browser regression scripts. The final snapshot is `build/github-ready-20261012`, with a ZIP and per-file hash manifest alongside it. It includes source, documentation, licenses and the labeled upstream demo, while excluding game files, generated game translations, SDKs, guest dumps and savedata. An independent Git index is prepared there for review; the active game/debug workspace remains intact.
 
 A clean compiler reconstruction is verified. A fresh full game build from the upload snapshot, GitHub-hosted automation and remote publication are not claimed by this preparation.
+
+## GitHub publication (2026-10-12)
+
+Following the user's instruction to commit and push to main, the 126-file audited source snapshot was committed as [f0a57cb](https://github.com/awest813/NCAA-10-PSP-Recomp/commit/f0a57cb05c295ad56f6effe22313a64b0d31e4e9) and pushed normally to `origin/main`. The connected GitHub API confirmed the same SHA remotely. The tracked source audit and whitespace checks passed before publication. Game files, generated game translations, SDKs, build outputs, dumps and saves remain local. The active game/debug workspace was preserved.
+
+Updated the publication and handoff documents to reflect the completed push. The existing ZIP and hash manifest remain dated preparation artifacts; Git is the record of these subsequent documentation changes. No additional runtime build or gameplay test was required for this documentation update.
