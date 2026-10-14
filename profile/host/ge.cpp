@@ -1292,7 +1292,10 @@ void Ge::shade_pixel(int x, int y, float z, float u, float v, float r, float g, 
     if (p.blend) {
         const float dst[4] = {static_cast<float>(old & 0xFFu), static_cast<float>((old >> 8u) & 0xFFu),
                               static_cast<float>((old >> 16u) & 0xFFu), static_cast<float>(old >> 24u)};
-        const float sa = color[3] * (1.0f / 255.0f), da = dst[3] * (1.0f / 255.0f);
+        const float sa = color[3] * (1.0f / 255.0f);
+        // 565 textures are opaque, but a 565 destination has no alpha/stencil
+        // channel: destination-alpha blend factors read zero.
+        const float da = p.fb_format == 0u ? 0.0f : dst[3] * (1.0f / 255.0f);
         auto factor = [&](std::uint32_t f, bool is_src, int k) -> float {
             switch (f) {
             case 0: return (is_src ? dst[k] : color[k]) * (1.0f / 255.0f);

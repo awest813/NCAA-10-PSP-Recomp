@@ -382,7 +382,10 @@ GLenum depth_func(std::uint32_t f) {
     return table[f & 7u];
 }
 
-GLenum blend_factor(std::uint32_t f, bool source, std::uint32_t fixed, bool &uses_constant) {
+GLenum blend_factor(std::uint32_t f, bool source, std::uint32_t fixed, bool &uses_constant, bool zero_dst_alpha) {
+    // The RGBA host surface retains opaque texture alpha for 565 sampling.
+    // Its alpha is not the PSP destination blend alpha, which is always zero.
+    if (zero_dst_alpha && is_dst_alpha_factor(f)) return (f & 1u) != 0u ? GL_ONE : GL_ZERO;
     switch (f) {
     case 0: return source ? GL_DST_COLOR : GL_SRC_COLOR;
     case 1: return source ? GL_ONE_MINUS_DST_COLOR : GL_ONE_MINUS_SRC_COLOR;
@@ -1497,8 +1500,8 @@ void GeGl::apply_state() {
     set_enabled(GL_BLEND, cache_.blend, s.blend);
     if (s.blend) {
         bool uses_constant = false;
-        GLenum src = blend_factor(s.src_factor, true, s.fix_a, uses_constant);
-        GLenum dst = blend_factor(s.dst_factor, false, s.fix_b, uses_constant);
+        GLenum src = blend_factor(s.src_factor, true, s.fix_a, uses_constant, s.fb_format == 0u);
+        GLenum dst = blend_factor(s.dst_factor, false, s.fix_b, uses_constant, s.fb_format == 0u);
         const bool alpha_modulation = s.src_factor == 10u && (s.fix_a & 0xFFFFFFu) == 0u &&
             (s.dst_factor == 6u || s.dst_factor == 7u) && (s.equation == 0u || s.equation == 2u);
         if (alpha_modulation) {
@@ -1754,6 +1757,9 @@ void GeGl::present(std::uint32_t fb_address, std::uint32_t stride, std::uint32_t
     glUseProgram(present_program_);
     glBindVertexArray(present_vao_);
     glActiveTexture(GL_TEXTURE0);
+    // A game sampler overrides texture parameters. Presentation owns its
+    // nearest, non-mipmapped filtering regardless of the preceding draw.
+    glBindSampler(0, 0);
     glBindTexture(GL_TEXTURE_2D, texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);

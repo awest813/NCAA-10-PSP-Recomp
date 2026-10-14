@@ -1,5 +1,33 @@
 # PPSSPP reference evidence
 
+## Current correction: native GLES capture precision (2026-10-14)
+
+The earlier local GLES replay harness accepted EGL's default color configuration, which was RGBA4444 on this machine. Its `glReadPixels` images therefore lost color precision even though rendering used RGBA8 attachments. Earlier GLES-candidate MAE values and frame-wide color/noise conclusions below are historical and invalid for color-fidelity analysis. Original PPSSPP reference images, project software direct-framebuffer output and synthetic tests reading explicit FBO/guest-memory pixels are unaffected. Old artifacts are preserved and their JSON reports now identify the correction.
+
+The harness now explicitly requests and checks RGBA8. Its primary output is direct guest-format RGB565 framebuffer readback; RGBA8 presented output must agree byte for byte before a comparison is accepted. Native test contexts also enforce at least eight bits per channel. Both full supplied captures pass this agreement check.
+
+| Corrected current renderer | Full RGB MAE | Field ROI MAE |
+| --- | --- | --- |
+| SDSU against direct PPSSPP software RGB565 | 0.5737 | 0.3164 |
+| Georgia Tech–Georgia against direct PPSSPP software RGB565 | 1.0227 | 0.0621 |
+| SDSU against the earlier cropped hardware window | 6.3190 | 2.9133 |
+
+Reports are `corrected-capture-comparison.json`; images are `corrected-capture-comparison.png`, `recomp-direct565.png` and `recomp-rgba8.png` in each original capture folder. The side-by-side image is PPSSPP software / current renderer. Raw candidate framebuffer SHA-256 and surface bits are retained. Exporting raw display memory intentionally adds one diagnostic GPU download after rendering. This is not a runtime-performance regression or a browser FPS measurement. Source `e0091fd` replayed with the corrected capture method gives the same display bytes as the RGB565 blend fix in these two scenes, so the lower error is a capture correction, not a demonstrated effect of that fix.
+
+The actual source correction is independently proven: RGB565 blend destination alpha must be zero, while sampling RGB565 textures must remain opaque. Tests previously expected zero but received green `0x07E0`; all destination-alpha factors and source/destination contributions now pass in software/GLES, with a separate opaque-texture alpha-test check. This follows the pinned [reference pixel handling](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/DrawPixel.cpp). Another regression exposed presentation inheriting a game's sampler: expected red became `(191,64,0)` with linear filtering and black with mip filtering. Presentation now explicitly clears that sampler binding before applying its own nearest filtering. Both cases pass through an explicit RGBA8 output FBO.
+
+## Diagnostic draw-prefix comparisons
+
+Local `build/reference-sdsu-prefix-20261014/make_prefix.py` clones affected register payloads before replacing later PRIM commands with NOP, avoiding mutation of deduplicated payloads still used by earlier records. Each copy retains the original final display-conversion draw 5215 and all data/state records. Originals stay intact. These are modified diagnostic captures, not original gameplay. The isolated official v1.20.4 reference used `--graphics=software`; repeated RGB565 reads match within each prefix. It was closed after capture. Inputs, manifests, reference captures and the local comparison scripts stay under ignored `build/`.
+
+With corrected capture precision, prefix 13/14 RGB MAE is 0.0791, prefix 30 is 0.0784, prefix 37 is exactly zero, prefix 100 is 0.4968 and prefix 323 is 2.5179. Prefix 37 ends after the base-field pass: pre-conversion RGB and final RGB565 display both agree. The remaining divergence is in later detail/geometry passes, rather than a demonstrated base-field color error. `corrected-summary.json` and each prefix's `corrected-capture-comparison.json/png` preserve results. Small sky coverage differences precede the field; later overlays can cover earlier differences. Do not infer full renderer accuracy from one exact prefix or two close full frames.
+
+Ten native suites, eight package cases, web build and NCAA identity verification pass. Latest package: `build/static-ncaa10-presentation-alpha`. Browser gameplay/FPS is still pending Chrome app access. GPU post-blend dithering/packing, alpha/stencil edge cases, hardware LOD/precision, full scene/mode coverage and performance remain unverified. Default guest RAM is 64 MiB.
+
+## Historical checkpoints below
+
+Their GLES image metrics are superseded by the capture correction above. Structural validation, reference hashes, independent pixel regressions and stated non-rendering evidence retain their original scope.
+
 ## User debug folder inspected on 2026-10-13
 
 Local source: `C:/Users/allen/Downloads/NACC_Football_10_USA_PSP-PSPKiNG`.

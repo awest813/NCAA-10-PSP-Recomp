@@ -727,6 +727,84 @@ void doubled_destination_alpha(bool use_gl) {
     }
 }
 
+void presentation_sampler_state() {
+    std::cout << "Presentation sampler-state tests: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    assert(gl.init());
+    // Alternating framebuffer pixels must remain sharp at 2x presentation.
+    for (unsigned y = 0; y < 272; ++y) for (unsigned x = 0; x < 512; ++x)
+        memory.store32(0x04000000 + (y * 512 + x) * 4, x & 1 ? 0xFF00FF00 : 0xFF0000FF);
+    GLuint texture = 0, target = 0, sampler = 0;
+    glGenTextures(1, &texture); glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 960, 544, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glGenFramebuffers(1, &target); glBindFramebuffer(GL_FRAMEBUFFER, target);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+    assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE);
+    glGenSamplers(1, &sampler);
+    bool matches = true;
+    for (GLint min_filter : {GL_LINEAR, GL_NEAREST_MIPMAP_NEAREST}) {
+        glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, min_filter);
+        glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glBindSampler(0, sampler); // State left by a textured game draw.
+        gl.present(0x04000000, 512, 3, target, 960, 544);
+        std::array<unsigned char, 4> pixel{};
+        glReadPixels(1, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+        assert(glGetError() == GL_NO_ERROR);
+        if (pixel[0] != 255 || pixel[1] != 0 || pixel[2] != 0)
+            std::cerr << "present: expected red, got " << unsigned(pixel[0]) << "," << unsigned(pixel[1]) << "," << unsigned(pixel[2]) << '\n';
+        matches &= pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0;
+    }
+    assert(matches);
+    glBindSampler(0, 0); glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteSamplers(1, &sampler); glDeleteFramebuffers(1, &target); glDeleteTextures(1, &texture);
+}
+
+void rgb565_destination_alpha(bool use_gl) {
+    std::cout << "RGB565 destination-alpha tests: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    const std::array<float, 6> data = {0, 0, 0, 64, 64, 0};
+    for (unsigned i = 0; i < data.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(data[i]));
+    for (bool source_factor : {true, false}) for (unsigned factor : {4u, 5u, 8u, 9u}) {
+        DisplayList background(memory);
+        background.command(0x9C, 0); background.command(0x9D, 64); background.command(0xD2, 0);
+        background.command(0xD4, 0); background.command(0xD5, 63 | (63 << 10));
+        background.command(0x12, (3u << 7u) | (1u << 23));
+        background.command(0x21, 0); background.command(0x55, 0x0000FF); background.command(0x58, 255);
+        background.draw(6, 2); background.run(ge);
+        DisplayList blend(memory);
+        blend.command(0x21, 1); blend.command(0x55, 0x00FF00);
+        blend.command(0xDF, source_factor ? factor | (10 << 4) : 10 | (factor << 4));
+        blend.command(0xE0, 0); blend.command(0xE1, 0); blend.draw(6, 2); blend.run(ge);
+        const unsigned address = 0x04000000 + (32 * 64 + 32) * 2;
+        if (use_gl) { gl.flush(); gl.prepare_vram_read(address, 2); }
+        const unsigned expected = (factor & 1) ? (source_factor ? 0x07E0 : 0x001F) : 0;
+        const auto actual = memory.load16(address);
+        if (actual != expected) std::cerr << "565 blend: expected 0x" << std::hex << expected << ", got 0x" << actual << std::dec << '\n';
+        assert(actual == expected);
+    }
+    // The zero destination blend alpha does not make a 565 texture transparent.
+    DisplayList green(memory);
+    green.command(0x21, 0); green.command(0x55, 0x00FF00); green.draw(6, 2); green.run(ge);
+    DisplayList red(memory);
+    red.command(0x9C, 0x60000); red.command(0xD2, 3); red.command(0x55, 0x0000FF);
+    red.draw(6, 2); red.run(ge);
+    const std::array<float, 10> uv = {0, 0, 0, 0, 0, 64, 64, 64, 64, 0};
+    for (unsigned i = 0; i < uv.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(uv[i]));
+    DisplayList textured(memory);
+    textured.command(0x12, 3u | (3u << 7u) | (1u << 23)); textured.command(0x1E, 1);
+    textured.command(0xA0, 0); textured.command(0xA8, 0x040040); textured.command(0xB8, 0x606);
+    textured.command(0xC3, 0); textured.command(0xC9, 0x103);
+    textured.command(0x22, 1); textured.command(0xDB, 0xFFFF02);
+    textured.draw(6, 2); textured.run(ge);
+    expect_pixel(memory, use_gl ? &gl : nullptr, 0x00FF00, 0, sample + 0x60000);
+}
+
 void ordered_dither(bool use_gl) {
     std::cout << "Ordered dither tests: " << (use_gl ? "GLES3" : "software") << std::endl;
     psprecomp::GuestMemory memory;
@@ -1068,9 +1146,14 @@ struct GlContext {
         EGLint major, minor, count;
         assert(display != EGL_NO_DISPLAY && eglInitialize(display, &major, &minor));
         assert(eglBindAPI(EGL_OPENGL_ES_API));
-        const EGLint attributes[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT, EGL_NONE};
+        const EGLint attributes[] = {EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT, EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+                                     EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8, EGL_NONE};
         EGLConfig config;
         assert(eglChooseConfig(display, attributes, &config, 1, &count) && count == 1);
+        for (EGLint channel : {EGL_RED_SIZE, EGL_GREEN_SIZE, EGL_BLUE_SIZE, EGL_ALPHA_SIZE}) {
+            EGLint bits = 0;
+            assert(eglGetConfigAttrib(display, config, channel, &bits) && bits >= 8);
+        }
         const EGLint context_attributes[] = {EGL_CONTEXT_MAJOR_VERSION, 3, EGL_NONE};
         context = eglCreateContext(display, config, EGL_NO_CONTEXT, context_attributes);
         const EGLint surface_attributes[] = {EGL_WIDTH, 1, EGL_HEIGHT, 1, EGL_NONE};
@@ -1093,6 +1176,7 @@ int main() {
     doubled_destination_alpha(false);
     render_target_precision(false);
     ordered_dither(false);
+    rgb565_destination_alpha(false);
     GlContext context;
     lighting_colors(true);
     lighting_components(true);
@@ -1102,8 +1186,10 @@ int main() {
     doubled_destination_alpha(true);
     render_target_precision(true);
     ordered_dither(true);
+    rgb565_destination_alpha(true);
     texture_filters();
     texture_mipmaps();
     mipmap_clut_and_vram();
+    presentation_sampler_state();
     std::cout << "GE shared software/GLES3 tests and GLES3 filter/mipmap tests passed\n";
 }

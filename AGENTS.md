@@ -34,6 +34,8 @@ Gameplay verification requires pressing Start and reaching actual play beyond ti
 
 Do not claim full PSP/render/audio/controller/mode accuracy from a short smoke test. A passing simulated Gamepad API test does not verify a physical Bluetooth controller. Failed/black reference captures are not valid visual comparisons.
 
+Native graphics captures must explicitly request and verify at least eight bits per RGBA channel; EGL defaults can select RGBA4444. Prefer direct guest-format framebuffer readback and verify that presentation matches it before computing image metrics. Earlier local GLES replay images using the default pbuffer are excluded from color-fidelity conclusions; see the 2026-10-14 correction in `docs/PPSSPP_REFERENCE.md`. Their independent synthetic pixel regressions remain valid.
+
 ## State and documentation
 
 - Preserve local game files, prior diagnostic captures and save exports. Export/hash saves before replacing fixtures; keep baseline and progressed checkpoints identifiable.

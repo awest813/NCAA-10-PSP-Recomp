@@ -48,6 +48,12 @@ Paths are relative to the repository root containing `scripts` and `profile`. Ex
 
 ## Preparing a useful patch or report
 
+**Validate the capture path before chasing pixels.** EGL defaults selected RGBA4444 in the original replay harness and distorted comparisons from correctly rendered RGBA8 targets. Request/query actual channel precision, export the guest-format framebuffer and require presented pixels to match it. Keep references and CPU/direct framebuffer output separate from affected GPU screenshots when correcting earlier reports. A better measurement is not itself a rendering improvement.
+
+**Separate texture opacity from destination blend alpha.** RGB565 samples as an opaque texture but has zero destination alpha for blending. Changing a shared decode helper to make every use transparent breaks the texture path. Cover both behaviors in display-list regressions.
+
+**Presentation owns its sampler.** A bound sampler overrides texture filtering parameters. Clear or replace the game's sampler before presenting; test both inherited linear filtering and inherited mip filtering against an RGBA8 output target. Correct game draw state alone does not establish correct presentation.
+
 **Test dithering across pipeline modes.** Ordered dither changes RGB before saturation and framebuffer conversion; clear mode and 8888 can also expose it. Check all signed nibble values, matrix-only changes, surface origins and internal resolution scaling. Blended output needs dithering after blending; a source-color offset does not implement that order. Preserve saturation-boundary fixtures so an early clamp cannot hide the difference.
 
 **Treat a mip chain as one cache resource.** Include each level's layout and content in cache identity/revalidation, count all decoded texels toward capacity, and keep pending draws from observing mutated data. Test a higher-level-only RAM update and a same-frame VRAM write while the base hash remains unchanged. Use distinct level colors and per-level indexed palettes to reveal incorrect selection and CLUT sharing. Explicit texel fetch still needs an appropriate sampler and backed mip chain on the tested GLES path.

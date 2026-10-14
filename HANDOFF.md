@@ -18,7 +18,19 @@ This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAs
 
 ## Latest rendering and reference evidence
 
-### Current ordered-dither checkpoint (2026-10-14)
+### Current capture correction and blend/presentation checkpoint (2026-10-14)
+
+**Correction:** the earlier native GLES replay harness selected EGL RGBA4444. Its captured images lost color precision, so previous GLES image-error values and related frame-wide color/noise conclusions are superseded. The PPSSPP reference VRAM images, project software direct-framebuffer output and synthetic FBO/guest-memory pixel regressions are unaffected. The local harness now requests/verifies RGBA8 and exports raw guest-format display memory; presented output must match that readback exactly.
+
+Corrected full-frame direct software-reference RGB MAE is **0.5737 for SDSU** (field ROI 0.3164) and **1.0227 for Georgia Tech–Georgia** (field ROI 0.0621). RGBA8 presentation and direct RGB565 readback match byte for byte in both scenes. The SDSU hardware-window comparison is 6.3190 / field 2.9133 and remains a different method. This is a measurement correction, not an improvement caused by today's source fixes. Replaying prior source `e0091fd` through the corrected harness gives identical raw display bytes before/after the RGB565 blend fix. Reports/images: each capture folder's `corrected-capture-comparison.json/png`; older reports carry explicit correction metadata.
+
+Two source bugs are fixed. RGB565 destination-alpha factors now read zero in software/GLES while RGB565 textures remain opaque; the fixture previously stored green `0x07E0` instead of zero. Presentation now unbinds a game sampler before applying nearest, non-mipmapped filtering. Its regression previously returned `(191,64,0)` with an inherited linear sampler and black with an inherited mipmapped sampler instead of red. Native test contexts explicitly request/verify RGBA8.
+
+Diagnostic prefix copies preserve early draws plus original final draw 5215; originals remain intact. Corrected prefix 37, ending after the base field, matches the reference RGB565 display exactly. Prefix 100 has RGB MAE 0.4968 and prefix 323 has 2.5179; later detail/geometry coverage is the next comparison target. Tools, manifests and captures remain local under `build/reference-sdsu-prefix-20261014`; the local replay harness is still experimental. Prefix images are modified diagnostics, not gameplay screenshots. The isolated reference process was closed.
+
+Latest package: `build/static-ncaa10-presentation-alpha`; log: `build/ncaa-presentation-alpha-web-build.log`. Ten native suites, eight package cases, web build and exact NCAA verification pass. Fresh browser/gameplay/FPS remains pending Chrome app access; no new approval was assumed or bypassed. The earlier access request remains pending. GPU post-blend dithering/packing, full hardware accuracy, sustained pacing/audio and broad mode/controller/device coverage remain open. Default 64 MiB / 56 MiB user partition and AOT execution are unchanged.
+
+### Prior ordered-dither checkpoint (GLES capture metrics superseded)
 
 The captured final draw's missing ordered dither is now implemented for GLES unblended draws/clears and software rasterization. Signed matrix values affect RGB before saturation and target packing, including 8888 and clear mode. Matrix phase follows logical PSP pixels, including surface origins and 2x rendering. The first fixture expected RGB565 word 0x732B but received 0x7B4C; it now passes in both backends. Coverage includes four target formats, matrix changes, negative/positive limits, enable/disable, clears, relocated targets and scaling. Software blend tests verify dithering before saturation. GLES blended dithering still requires a post-blend path and remains open; it is deliberately not applied to the source color.
 
