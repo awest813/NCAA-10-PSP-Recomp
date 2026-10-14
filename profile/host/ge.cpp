@@ -1252,29 +1252,35 @@ void Ge::shade_pixel(int x, int y, float z, float u, float v, float r, float g, 
     if (p.texture) {
         float tex[4];
         sample_texture(u, v, tex);
+        // Texture functions consume byte colors. Doubling applies before the
+        // fixed-point division; alpha is never doubled.
+        for (float &channel : color) channel = std::floor(clamp255(channel));
+        const float rgb_scale = p.tex_double ? 2.0f : 1.0f;
+        const float alpha = p.tex_alpha ? std::floor((color[3] + 1.0f) * tex[3] / 256.0f) : color[3];
         switch (p.tex_func) {
         case 0: // modulate
-            for (int k = 0; k < 3; ++k) color[k] = color[k] * tex[k] * (1.0f / 255.0f);
-            if (p.tex_alpha) color[3] = color[3] * tex[3] * (1.0f / 255.0f);
+            for (int k = 0; k < 3; ++k) color[k] = std::floor((color[k] + 1.0f) * tex[k] * rgb_scale / 256.0f);
+            color[3] = alpha;
             break;
         case 1: // decal
-            if (p.tex_alpha) for (int k = 0; k < 3; ++k) color[k] += (tex[k] - color[k]) * tex[3] * (1.0f / 255.0f);
-            else for (int k = 0; k < 3; ++k) color[k] = tex[k];
+            if (p.tex_alpha) for (int k = 0; k < 3; ++k)
+                color[k] = std::floor(((color[k] + 1.0f) * (255.0f - tex[3]) + (tex[k] + 1.0f) * tex[3]) * rgb_scale / 256.0f);
+            else for (int k = 0; k < 3; ++k) color[k] = tex[k] * rgb_scale;
             break;
         case 2: // blend
-            for (int k = 0; k < 3; ++k) color[k] = (color[k] * (255.0f - tex[k]) + p.env[k] * tex[k]) * (1.0f / 255.0f);
-            if (p.tex_alpha) color[3] = color[3] * tex[3] * (1.0f / 255.0f);
+            for (int k = 0; k < 3; ++k)
+                color[k] = std::floor((color[k] * (255.0f - tex[k]) + p.env[k] * tex[k] + 255.0f) * rgb_scale / 256.0f);
+            color[3] = alpha;
             break;
         case 3: // replace
-            for (int k = 0; k < 3; ++k) color[k] = tex[k];
+            for (int k = 0; k < 3; ++k) color[k] = tex[k] * rgb_scale;
             if (p.tex_alpha) color[3] = tex[3];
             break;
         default: // add
-            for (int k = 0; k < 3; ++k) color[k] = color[k] + tex[k];
-            if (p.tex_alpha) color[3] = color[3] * tex[3] * (1.0f / 255.0f);
+            for (int k = 0; k < 3; ++k) color[k] = (color[k] + tex[k]) * rgb_scale;
+            color[3] = alpha;
             break;
         }
-        if (p.tex_double) for (int k = 0; k < 3; ++k) color[k] *= 2.0f;
     }
     color[0] += sr; color[1] += sg; color[2] += sb;
     for (float &channel : color) channel = clamp255(channel);

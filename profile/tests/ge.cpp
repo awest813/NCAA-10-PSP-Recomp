@@ -727,6 +727,79 @@ void doubled_destination_alpha(bool use_gl) {
     }
 }
 
+void texture_function_precision(bool use_gl) {
+    std::cout << "Texture-function integer precision: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    constexpr unsigned texture = vertices + 0x1000;
+    // The first case distinguishes /256 with a boosted primary from /255.
+    struct Case { unsigned primary, texel, function, expected; bool doubled; };
+    const Case cases[] = {
+        {0x0AC8C8C8, 0x14C8C8C8, 0, 0x9D9D9D, false},
+        {0x0A80500A, 0x143C2814, 0, 0x1E0C00, false},
+        {0x0A80500A, 0x143C2814, 0, 0x3C1901, true},
+        {0x0A80500A, 0x143C2814, 1, 0x7B4D0B, false},
+        {0x0A80500A, 0x143C2814, 1, 0xF69B17, true},
+        {0x0A80500A, 0x143C2814, 2, 0x9A5B0C, false},
+        {0x0A80500A, 0x143C2814, 2, 0xFFB719, true},
+        {0x0A80500A, 0x143C2814, 3, 0x3C2814, false},
+        {0x0A80500A, 0x143C2814, 3, 0x785028, true},
+        {0x0A80500A, 0x143C2814, 4, 0xBC781E, false},
+        {0x0A80500A, 0x143C2814, 4, 0xFFF03C, true},
+    };
+    const std::array<float, 10> data = {.5f, .5f, 0, 0, 0, .5f, .5f, 64, 64, 0};
+    for (unsigned i = 0; i < data.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(data[i]));
+    for (bool rgba : {true, false}) for (const auto &test : cases) {
+        memory.store32(texture, test.texel);
+        ge.next_frame();
+        DisplayList background(memory);
+        background.command(0x9C, 0); background.command(0x9D, 64); background.command(0xD2, 3);
+        background.command(0xD4, 0); background.command(0xD5, 63 | (63 << 10));
+        background.command(0x12, 3u | (3u << 7u) | (1u << 23));
+        background.command(0x1E, 0); background.command(0x22, 0);
+        background.command(0x55, 0xFF00FF); background.draw(6, 2); background.run(ge);
+        DisplayList dl(memory);
+        dl.command(0x12, 3u | (3u << 7u) | (1u << 23)); dl.command(0x1E, 1);
+        dl.command(0x55, test.primary); dl.command(0x58, test.primary >> 24);
+        dl.command(0xA0, texture & 0xFFFFFF); dl.command(0xA8, 0x080001);
+        dl.command(0xB8, 0); dl.command(0xC2, 0); dl.command(0xC3, 3);
+        dl.command(0xC6, 0); dl.command(0xC7, 0x101);
+        dl.command(0xC9, test.function | (rgba ? 0x100 : 0) | (test.doubled ? 0x10000 : 0));
+        dl.command(0xCA, 0xF0961E);
+        // Alpha is tested before stencil takes ownership of framebuffer alpha.
+        unsigned alpha = !rgba || test.function == 1 ? 10 : test.function == 3 ? 20 : 0;
+        dl.command(0x22, 1); dl.command(0xDB, 2 | (alpha << 8) | 0xFF0000);
+        dl.draw(6, 2); dl.run(ge);
+        unsigned expected = test.expected;
+        if (!rgba && test.function == 1) expected = test.doubled ? 0x785028 : 0x3C2814;
+        expect_pixel(memory, use_gl ? &gl : nullptr, expected);
+    }
+    // Constant byte colors must survive perspective interpolation at every
+    // interior pixel, including non-power-of-two channels and varying clip w.
+    memory.store32(texture, 0xFFFFFFFF);
+    ge.next_frame();
+    const std::array<float, 15> perspective = {.5f, .5f, -.75f, -.75f, 1,
+                                              .5f, .5f, .75f, -.75f, 1,
+                                              .5f, .5f, 0, 3, 4};
+    for (unsigned i = 0; i < perspective.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(perspective[i]));
+    DisplayList projected(memory);
+    projected.command(0x12, 3u | (3u << 7u));
+    projected.command(0x22, 0); projected.command(0xC9, 0x100);
+    projected.command(0x55, 0x489A79); projected.command(0x58, 255);
+    projected.number(0x42, 32); projected.number(0x43, 32); projected.number(0x44, 32767);
+    projected.number(0x45, 32); projected.number(0x46, 32); projected.number(0x47, 32767);
+    projected.command(0x3E, 0);
+    for (float value : std::array<float, 16>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0})
+        projected.number(0x3F, value);
+    projected.draw(); projected.run(ge);
+    for (unsigned y = 20; y < 36; ++y) for (unsigned x = 24; x < 40; ++x)
+        expect_pixel(memory, use_gl ? &gl : nullptr, 0x489A79, 0, 0x04000000 + (y * 64 + x) * 4);
+}
+
 void presentation_sampler_state() {
     std::cout << "Presentation sampler-state tests: GLES3" << std::endl;
     psprecomp::GuestMemory memory;
@@ -1177,6 +1250,7 @@ int main() {
     render_target_precision(false);
     ordered_dither(false);
     rgb565_destination_alpha(false);
+    texture_function_precision(false);
     GlContext context;
     lighting_colors(true);
     lighting_components(true);
@@ -1187,6 +1261,7 @@ int main() {
     render_target_precision(true);
     ordered_dither(true);
     rgb565_destination_alpha(true);
+    texture_function_precision(true);
     texture_filters();
     texture_mipmaps();
     mipmap_clut_and_vram();

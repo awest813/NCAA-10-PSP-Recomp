@@ -18,7 +18,17 @@ This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAs
 
 ## Latest rendering and reference evidence
 
-### Current capture correction and blend/presentation checkpoint (2026-10-14)
+### Current texture-function and first-divergent-blend checkpoint (2026-10-14)
+
+New diagnostic prefixes narrow the first mismatch to original draw ordinal **39**: prefixes 38/39 (draws through ordinal 37/38) match exactly, then prefix 40 differs. Disabling blending only before draw 39 in a cloned payload reduces pre-conversion source RGB error to one green-channel unit on row 218. A local shader probe exposes source alpha as RGB independently of framebuffer stencil alpha. Separate fixed-point blend products predict 77,245 of 80,160 lower-field reference pixels exactly (96.36%); maximum prediction channel error is two. This supports blend precision as the next target, with remaining sampling/geometry differences still possible. Evidence: `build/reference-sdsu-prefix-20261014/first-divergent-blend-analysis.json`, prefix 38/39/40/45 and `source40`. These are modified diagnostics, not gameplay screenshots. The isolated reference was closed.
+
+Texture modulation, decal, environment blend, replace and add now use byte-channel arithmetic in software/GLES, including RGB doubling before division and undoubled alpha. Tests reproduce software 156 versus expected 157 and an old GLES alpha-test rejection that leaves magenta. A perspective fixture checks constant non-power-of-two byte channels across 256 interior pixels; without the numerical guard it loses one unit. Shader color varyings carry byte units. No framebuffer copies or readbacks were added to production rendering.
+
+**Full-frame comparison worsens slightly:** SDSU corrected RGB MAE changes 0.5737 → **0.5854** (field 0.3164 → 0.3196); Georgia Tech–Georgia changes 1.0227 → **1.0445** (field unchanged at 0.0621). These are targeted texture-stage corrections, not an overall accuracy improvement. Prefix 39 remains exact; prefix 40 changes 0.2824 → 0.3552. Reports/images: `texture-function-comparison.json/png` in the existing capture folders and `texture-function-summary.json` in the prefix folder. RGBA8 presentation equals direct RGB565 output in every measured case. General GPU blend rounding/post-blend dithering/packing remain open; preserve primitive order and measure performance when implementing them.
+
+Latest package: `build/static-ncaa10-texture-functions` (14 companions, no ISO). Native game rebuild, ten native suites, final web build, eight package cases and exact title verification pass. Log: `build/ncaa-texture-function-web-build.log` (final up-to-date check); the final Wasm contains the changed shader and numerical guard. Fresh browser gameplay/FPS/audio remains pending Chrome app access. Default 64 MiB / 56 MiB user partition and AOT execution are unchanged.
+
+### Prior capture correction and blend/presentation checkpoint (2026-10-14)
 
 **Correction:** the earlier native GLES replay harness selected EGL RGBA4444. Its captured images lost color precision, so previous GLES image-error values and related frame-wide color/noise conclusions are superseded. The PPSSPP reference VRAM images, project software direct-framebuffer output and synthetic FBO/guest-memory pixel regressions are unaffected. The local harness now requests/verifies RGBA8 and exports raw guest-format display memory; presented output must match that readback exactly.
 

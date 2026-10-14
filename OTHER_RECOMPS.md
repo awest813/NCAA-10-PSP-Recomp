@@ -48,6 +48,8 @@ Paths are relative to the repository root containing `scripts` and `profile`. Ex
 
 ## Preparing a useful patch or report
 
+**Separate texture arithmetic from blending.** GE texture functions consume byte colors with mode-specific rounding; RGB doubling precedes division and does not double alpha. Test all functions with exact alpha-test outcomes, since framebuffer alpha may represent stencil. Use constant non-power-of-two colors and varying clip w to reveal interpolation roundoff. A reference prefix with blending disabled can isolate source-color differences, but only on a preserved diagnostic copy. Report full-scene metrics even when they worsen after a proven stage correction.
+
 **Validate the capture path before chasing pixels.** EGL defaults selected RGBA4444 in the original replay harness and distorted comparisons from correctly rendered RGBA8 targets. Request/query actual channel precision, export the guest-format framebuffer and require presented pixels to match it. Keep references and CPU/direct framebuffer output separate from affected GPU screenshots when correcting earlier reports. A better measurement is not itself a rendering improvement.
 
 **Separate texture opacity from destination blend alpha.** RGB565 samples as an opaque texture but has zero destination alpha for blending. Changing a shared decode helper to make every use transparent breaks the texture path. Cover both behaviors in display-list regressions.

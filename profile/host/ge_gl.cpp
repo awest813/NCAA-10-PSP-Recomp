@@ -48,7 +48,7 @@ void main() {
     v_uv = vec3(a_uv, a_q);
     // GE colors interpolate in screen space, while UV remains perspective
     // correct. Carry w with the colors to cancel GL's 1/w interpolation.
-    v_color = a_color * w;
+    v_color = (a_color * 255.0) * w;
     v_secondary = a_secondary * w;
     v_color_w = w;
     v_lod_w = w * w;
@@ -175,7 +175,8 @@ void main() {
     // The GE stores integer 16-bit depth. Preserve that precision before
     // comparisons even though the host attachment has 24 depth bits.
     gl_FragDepth = floor(gl_FragCoord.z * 65535.0) / 65535.0;
-    vec4 c = v_color / v_color_w;
+    vec4 primary = v_color / v_color_w;
+    vec4 c = primary / 255.0;
     if (u_clear) {
         o_color = quantize_output(c);
         return;
@@ -195,23 +196,30 @@ void main() {
         }
         vec4 t = u_lod_limits.x > 0.0 ? sample_mips(uv) : texture(u_tex, (uv + u_tex_origin) / u_tex_size);
         if (u_tex_opaque) t.a = 1.0;
+        // GE texture functions operate on byte channels, before blending or
+        // alpha tests. Preserve the division's truncation and double RGB first.
+        // Perspective interpolation can put an exact constant byte a few
+        // float ULPs below its integer. Preserve that byte before truncating.
+        c = floor(clamp(primary, 0.0, 255.0) + 0.0001);
+        t = floor(t * 255.0 + 0.5);
+        float rgb_scale = u_tex_double ? 2.0 : 1.0;
+        float alpha = u_tex_alpha ? floor((c.a + 1.0) * t.a / 256.0) : c.a;
         if (u_tex_func == 0) {
-            c.rgb *= t.rgb;
-            if (u_tex_alpha) c.a *= t.a;
+            c.rgb = floor((c.rgb + 1.0) * t.rgb * rgb_scale / 256.0);
+            c.a = alpha;
         } else if (u_tex_func == 1) {
-            c.rgb = u_tex_alpha ? mix(c.rgb, t.rgb, t.a) : t.rgb;
+            c.rgb = u_tex_alpha ? floor(((c.rgb + 1.0) * (255.0 - t.a) + (t.rgb + 1.0) * t.a) * rgb_scale / 256.0) : t.rgb * rgb_scale;
         } else if (u_tex_func == 2) {
-            c.rgb = mix(c.rgb, u_env, t.rgb);
-            if (u_tex_alpha) c.a *= t.a;
+            c.rgb = floor((c.rgb * (255.0 - t.rgb) + floor(u_env * 255.0 + 0.5) * t.rgb + 255.0) * rgb_scale / 256.0);
+            c.a = alpha;
         } else if (u_tex_func == 3) {
-            c.rgb = t.rgb;
+            c.rgb = t.rgb * rgb_scale;
             if (u_tex_alpha) c.a = t.a;
         } else {
-            c.rgb += t.rgb;
-            if (u_tex_alpha) c.a *= t.a;
+            c.rgb = (c.rgb + t.rgb) * rgb_scale;
+            c.a = alpha;
         }
-        if (u_tex_double) c.rgb *= 2.0;
-        c = clamp(c, 0.0, 1.0);
+        c = clamp(c, 0.0, 255.0) / 255.0;
     }
     c.rgb = clamp(c.rgb + v_secondary / v_color_w, 0.0, 1.0);
     if (u_alpha_test) {
