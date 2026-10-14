@@ -101,8 +101,8 @@ private:
                      float sr = 0, float sg = 0, float sb = 0, float fog = 255);
 
     void sample_texture(float u, float v, float rgba[4]) const;
-    [[nodiscard]] std::uint32_t fetch_texel(int x, int y) const;
-    [[nodiscard]] std::uint32_t clut_lookup(std::uint32_t index) const;
+    [[nodiscard]] std::uint32_t fetch_texel(int x, int y, unsigned level = 0) const;
+    [[nodiscard]] std::uint32_t clut_lookup(std::uint32_t index, unsigned level = 0) const;
     [[nodiscard]] std::uint32_t read_pixel(std::uint32_t address) const;
     void write_pixel(std::uint32_t address, std::uint32_t rgba, std::uint32_t old);
 
@@ -131,10 +131,13 @@ private:
     };
     void prepare_pixel_state();
 
-    // Decoded level-0 textures.
+    // Decoded textures, with the complete regular mip chain kept in one entry
+    // so eviction cannot invalidate a level while another level is in use.
     struct TextureKey {
         std::uint32_t address, format, width, height, buf_width, swizzle, clut_mode;
         std::uint64_t clut_hash;
+        std::uint32_t mip_count{}, mip_clut{};
+        std::array<std::uint32_t, 21> mip_regs{};
         bool operator==(const TextureKey &) const = default;
     };
     struct TextureKeyHash {
@@ -143,11 +146,16 @@ private:
                               (static_cast<std::uint64_t>(k.height) << 20u) ^ (static_cast<std::uint64_t>(k.buf_width) << 32u) ^
                               (static_cast<std::uint64_t>(k.swizzle) << 44u) ^ (static_cast<std::uint64_t>(k.clut_mode) << 45u) ^
                               k.clut_hash;
+            h ^= k.mip_count | (k.mip_clut << 8u);
+            for (unsigned i = 0; i < k.mip_count * 3; ++i) h = (h ^ k.mip_regs[i]) * 0x100000001B3ull;
             return static_cast<std::size_t>(h ^ (h >> 29u));
         }
     };
     struct CachedTexture {
         std::vector<std::uint32_t> texels;
+        std::array<std::vector<std::uint32_t>, 7> mips;
+        std::uint32_t mip_count{};
+        std::uint64_t texel_count{};
         std::uint64_t source_hash{};
         std::uint32_t frame{};
         std::uint64_t vram_generation{};

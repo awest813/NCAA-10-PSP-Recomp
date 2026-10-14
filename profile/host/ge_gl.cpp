@@ -38,6 +38,7 @@ out vec4 v_color;
 out vec3 v_secondary;
 out float v_color_w;
 out float v_fog;
+out float v_lod_w;
 void main() {
     float w = a_pos.w;
     v_fog = a_fog * w;
@@ -50,6 +51,7 @@ void main() {
     v_color = a_color * w;
     v_secondary = a_secondary * w;
     v_color_w = w;
+    v_lod_w = w * w;
 }
 )";
 
@@ -77,11 +79,15 @@ uniform vec2 u_tex_clamp;  // 1 = clamp, 0 = repeat, per axis
 uniform bool u_tex_opaque; // sampling a 16-bit 565 surface: no alpha
 uniform bool u_fog_enable;
 uniform vec3 u_fog_color;
+uniform vec3 u_lod_params; // mode, signed bias in levels, slope
+uniform vec3 u_lod_limits; // last uploaded level, mip interpolation, render scale
+uniform vec2 u_lod_filter; // within-level min/mag linear filtering
 in vec3 v_uv;
 in vec4 v_color;
 in vec3 v_secondary;
 in float v_color_w;
 in float v_fog;
+in float v_lod_w;
 out vec4 o_color;
 bool compare(int f, int a, int b) {
     if (f == 0) return false;
@@ -107,6 +113,55 @@ vec4 quantize_output(vec4 color) {
     }
     return color;
 }
+vec4 mip_texel(ivec2 p, int level, ivec2 size) {
+    ivec2 wrapped = (p % size + size) % size;
+    p.x = u_tex_clamp.x > 0.0 ? clamp(p.x, 0, size.x - 1) : wrapped.x;
+    p.y = u_tex_clamp.y > 0.0 ? clamp(p.y, 0, size.y - 1) : wrapped.y;
+    return floor(texelFetch(u_tex, p, level) * 255.0 + 0.5);
+}
+vec4 mip_level(vec2 uv, int level, bool linear) {
+    ivec2 size = max(ivec2(u_tex_size) >> level, ivec2(1));
+    vec2 at = uv * vec2(size);
+    vec4 color = vec4(0.0);
+    if (!linear) {
+        color = mip_texel(ivec2(floor(at)), level, size);
+    } else {
+        at -= 0.5;
+        ivec2 p = ivec2(floor(at));
+        vec2 f = floor(fract(at) * 16.0);
+        vec4 top = mip_texel(p, level, size) * (16.0 - f.x) + mip_texel(p + ivec2(1, 0), level, size) * f.x;
+        vec4 bottom = mip_texel(p + ivec2(0, 1), level, size) * (16.0 - f.x) + mip_texel(p + ivec2(1), level, size) * f.x;
+        color = floor((top * (16.0 - f.y) + bottom * f.y) / 256.0);
+    }
+    return color;
+}
+vec4 sample_mips(vec2 uv) {
+    float footprint = 1.0;
+    if (u_lod_params.x == 0.0) {
+        vec2 dx = abs(dFdx(uv)) * u_lod_limits.z;
+        vec2 dy = abs(dFdy(uv)) * u_lod_limits.z;
+        footprint = max(max(dx.x, dx.y), max(dy.x, dy.y));
+    } else if (u_lod_params.x == 2.0) {
+        // Cancel perspective interpolation to recover screen-linear clip w.
+        footprint = 2.0 * (v_lod_w / v_color_w) * u_lod_params.z;
+    }
+    // The GE's LOD fraction is the high four mantissa bits, rather than a
+    // transcendental log2. Signed bias applies in all three modes.
+    uint bits = floatBitsToUint(max(footprint, 0.000000001));
+    float detail = float(int((bits >> 23u) & 255u) - 127) + float((bits >> 19u) & 15u) / 16.0;
+    detail += u_lod_params.y;
+    bool linear = (detail > 0.0 ? u_lod_filter.x : u_lod_filter.y) > 0.0;
+    float lod = clamp(detail, 0.0, u_lod_limits.x);
+    bool blend = u_lod_limits.y > 0.0;
+    int level = int(floor(lod + (blend ? 0.0 : 0.5)));
+    vec2 normalized = uv / u_tex_size;
+    vec4 color = mip_level(normalized, level, linear);
+    if (blend && float(level) < u_lod_limits.x) {
+        float f = floor(fract(lod) * 16.0);
+        if (f > 0.0) color = floor((color * (16.0 - f) + mip_level(normalized, level + 1, linear) * f) / 16.0);
+    }
+    return color / 255.0;
+}
 void main() {
     // The GE stores integer 16-bit depth. Preserve that precision before
     // comparisons even though the host attachment has 24 depth bits.
@@ -129,7 +184,7 @@ void main() {
             // Wrap or clamp inside the texture's own rectangle, never into neighbouring pixels.
             uv = mix(mod(uv, u_tex_window), clamp(uv, vec2(0.5), u_tex_window - 0.5), u_tex_clamp);
         }
-        vec4 t = texture(u_tex, (uv + u_tex_origin) / u_tex_size);
+        vec4 t = u_lod_limits.x > 0.0 ? sample_mips(uv) : texture(u_tex, (uv + u_tex_origin) / u_tex_size);
         if (u_tex_opaque) t.a = 1.0;
         if (u_tex_func == 0) {
             c.rgb *= t.rgb;
@@ -523,6 +578,9 @@ bool GeGl::init() {
     u_tex_opaque_ = glGetUniformLocation(program_, "u_tex_opaque");
     u_fog_enable_ = glGetUniformLocation(program_, "u_fog_enable");
     u_fog_color_ = glGetUniformLocation(program_, "u_fog_color");
+    u_lod_params_ = glGetUniformLocation(program_, "u_lod_params");
+    u_lod_limits_ = glGetUniformLocation(program_, "u_lod_limits");
+    u_lod_filter_ = glGetUniformLocation(program_, "u_lod_filter");
     u_present_tex_ = glGetUniformLocation(present_program_, "u_tex");
     u_present_rect_ = glGetUniformLocation(present_program_, "u_rect");
     u_present_origin_ = glGetUniformLocation(present_program_, "u_origin");
@@ -565,12 +623,15 @@ bool GeGl::init() {
     glGenTextures(1, &scratch_texture_);
     // Bound whenever a draw samples nothing, so no framebuffer texture stays
     // bound to the sampler (WebGL rejects that as a feedback loop).
-    // Independent min/mag filters with every wrap combination. Mipmap level
-    // selection is separate; these samplers currently sample level zero.
-    // Index = mag_linear | clamp_u << 1 | clamp_v << 2 | min_linear << 3.
-    glGenSamplers(16, samplers_);
-    for (int i = 0; i < 16; ++i) {
-        glSamplerParameteri(samplers_[i], GL_TEXTURE_MIN_FILTER, (i & 8) != 0 ? GL_LINEAR : GL_NEAREST);
+    // Mip texelFetch requires a mip-capable sampler even though the shader
+    // handles LOD/filter arithmetic. Other textures keep the ordinary path.
+    // Index = mag_linear | clamp_u << 1 | clamp_v << 2 | min_linear << 3 | mip << 4.
+    glGenSamplers(32, samplers_);
+    for (int i = 0; i < 32; ++i) {
+        const GLint min_filter = (i & 16) != 0
+            ? ((i & 8) != 0 ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST)
+            : ((i & 8) != 0 ? GL_LINEAR : GL_NEAREST);
+        glSamplerParameteri(samplers_[i], GL_TEXTURE_MIN_FILTER, min_filter);
         glSamplerParameteri(samplers_[i], GL_TEXTURE_MAG_FILTER, (i & 1) != 0 ? GL_LINEAR : GL_NEAREST);
         glSamplerParameteri(samplers_[i], GL_TEXTURE_WRAP_S, (i & 2) != 0 ? GL_CLAMP_TO_EDGE : GL_REPEAT);
         glSamplerParameteri(samplers_[i], GL_TEXTURE_WRAP_T, (i & 4) != 0 ? GL_CLAMP_TO_EDGE : GL_REPEAT);
@@ -1203,18 +1264,27 @@ GLuint GeGl::texture_for_state(Surface *source, int ox, int oy) {
     }
     GlTexture &texture = textures_[s.texture_identity];
     if (texture.id == 0u) glGenTextures(1, &texture.id);
-    if (texture.hash != s.texture_hash || texture.width != s.tex_width || texture.height != s.tex_height) {
+    if (texture.hash != s.texture_hash || texture.width != s.tex_width || texture.height != s.tex_height ||
+        texture.mip_count != s.mip_count) {
         bind_texture0(texture.id);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, static_cast<GLsizei>(s.tex_width), static_cast<GLsizei>(s.tex_height), 0,
                      GL_RGBA, GL_UNSIGNED_BYTE, s.texels);
+        for (unsigned level = 1; level <= s.mip_count; ++level)
+            glTexImage2D(GL_TEXTURE_2D, static_cast<GLint>(level), GL_RGBA8,
+                         static_cast<GLsizei>(std::max(s.tex_width >> level, 1u)),
+                         static_cast<GLsizei>(std::max(s.tex_height >> level, 1u)), 0,
+                         GL_RGBA, GL_UNSIGNED_BYTE, s.mip_texels[level - 1]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, static_cast<GLint>(s.mip_count));
         texture.hash = s.texture_hash;
         texture.width = s.tex_width;
         texture.height = s.tex_height;
+        texture.mip_count = s.mip_count;
     }
     set_uniform(u_tex_size_, static_cast<float>(s.tex_width), static_cast<float>(s.tex_height), 0.0f, 2);
     set_uniform(u_tex_origin_, 0.0f, 0.0f, 0.0f, 2);
     set_uniform(u_tex_window_, 0.0f, 0.0f, 0.0f, 2);
+    set_uniform(u_tex_clamp_, s.clamp_u ? 1.0f : 0.0f, s.clamp_v ? 1.0f : 0.0f, 0.0f, 2);
     set_uniform_int(u_tex_opaque_, 0);
     return texture.id;
 }
@@ -1306,6 +1376,10 @@ void GeGl::apply_state() {
     // Unblended writes and clears can pack directly. Blended writes need
     // quantization after the host blend equation, not on the source color.
     set_uniform_int(u_output_format_, s.clear || !s.blend ? static_cast<int>(s.fb_format) : 3);
+    set_uniform(u_lod_params_, static_cast<float>(s.lod_mode), s.lod_bias, s.lod_slope, 3);
+    set_uniform(u_lod_limits_, static_cast<float>(s.mip_count), s.mip_linear ? 1.0f : 0.0f,
+                static_cast<float>(scale_), 3);
+    set_uniform(u_lod_filter_, s.min_linear ? 1.0f : 0.0f, s.mag_linear ? 1.0f : 0.0f, 0.0f, 2);
 
     GLuint texture = 0u;
     if (!s.clear && s.texture) texture = texture_for_state(source, source_ox, source_oy);
@@ -1467,7 +1541,7 @@ void GeGl::apply_state() {
     bind_texture0(texture);
     const bool clamp_u = s.clamp_u || s.tex_from_target, clamp_v = s.clamp_v || s.tex_from_target;
     const GLuint sampler = samplers_[(s.mag_linear ? 1 : 0) | (clamp_u ? 2 : 0) | (clamp_v ? 4 : 0) |
-                                     (s.min_linear ? 8 : 0)];
+                                     (s.min_linear ? 8 : 0) | (s.mip_count ? 16 : 0)];
     if (cache_.sampler != sampler) {
         glBindSampler(0, sampler);
         cache_.sampler = sampler;

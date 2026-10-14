@@ -727,6 +727,139 @@ void doubled_destination_alpha(bool use_gl) {
     }
 }
 
+void texture_mipmaps() {
+    std::cout << "Texture mipmap tests: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl);
+    constexpr std::uint32_t texture = vertices + 0x1000;
+    const std::array<unsigned, 3> colors = {0x0000FF, 0x00FF00, 0xFF0000};
+    for (unsigned level = 0; level < 3; ++level) {
+        const unsigned size = 64 >> level;
+        for (unsigned i = 0; i < size * size; ++i)
+            memory.store32(texture + level * 0x4000 + i * 4, colors[level] | 0xFF000000);
+    }
+    auto draw = [&](unsigned mode, int bias, unsigned filter, float extent, float slope, unsigned expected, float start = 0) {
+        const std::array<float, 10> data = {start, .5f, 0, 0, 0, extent + start, .5f, 64, 64, 0};
+        for (unsigned i = 0; i < data.size(); ++i)
+            memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(data[i]));
+        DisplayList dl(memory);
+        dl.command(0x9C, 0); dl.command(0x9D, 64); dl.command(0xD2, 3);
+        dl.command(0xD4, 0); dl.command(0xD5, 63 | (63 << 10));
+        dl.command(0x12, 3u | (3u << 7u) | (1u << 23)); dl.command(0x1E, 1);
+        for (unsigned level = 0; level < 3; ++level) {
+            dl.command(0xA0 + level, (texture + level * 0x4000) & 0xFFFFFF);
+            dl.command(0xA8 + level, 0x080000 | (64 >> level));
+            dl.command(0xB8 + level, (6 - level) | ((6 - level) << 8));
+        }
+        dl.command(0xC2, 2 << 16); dl.command(0xC3, 3); dl.command(0xC9, 3);
+        dl.command(0xC6, filter); dl.command(0xC8, mode | ((static_cast<unsigned>(bias) & 255) << 16));
+        dl.number(0xD0, slope); dl.draw(6, 2); dl.run(ge);
+        expect_pixel(memory, &gl, expected, 1);
+    };
+    draw(1, 16, 4, 64, 1, colors[1]);
+    draw(1, 32, 4, 64, 1, colors[2]);
+    draw(1, -16, 4, 64, 1, colors[0]);
+    draw(1, 127, 4, 64, 1, colors[2]);
+    draw(3, 16, 4, 64, 1, colors[1]); // mode 3 aliases constant
+    draw(1, 8, 6, 64, 1, 0x007F7F); // half red / half green
+    draw(1, 20, 6, 64, 1, 0x3FBF00); // 3/4 green / 1/4 blue
+    draw(1, 8, 4, 64, 1, colors[1]); // nearest mip rounds up at half
+    draw(0, 0, 4, 128, 1, colors[1]);
+    draw(0, 0, 4, 256, 1, colors[2]);
+    draw(0, -16, 4, 256, 1, colors[1]);
+    draw(2, 0, 4, 64, 1, colors[1]);
+    draw(2, 0, 4, 64, 2, colors[2]);
+    draw(2, 0, 4, 64, .5f, colors[0]);
+    draw(1, 32, 0, 64, 1, colors[0]); // disabling mipmaps resets the path
+    assert(gl.set_render_scale(2) == 2);
+    draw(0, 0, 4, 256, 1, colors[2]); // LOD stays in native PSP pixel units
+    assert(gl.set_render_scale(1) == 1);
+    // A perspective triangle has clip w = 1, 1, 4. At the test pixel,
+    // screen-linear w is about 2.53; perspective-correct w is about 1.62.
+    // Slope .4 must therefore select mip 1, rather than mip 0.
+    const std::array<float, 15> perspective = {.5f, .5f, -.75f, -.75f, 1,
+                                              .5f, .5f, .75f, -.75f, 1,
+                                              .5f, .5f, 0, 3, 4};
+    for (unsigned i = 0; i < perspective.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(perspective[i]));
+    DisplayList projected(memory);
+    projected.command(0x12, 3u | (3u << 7u)); projected.command(0xC6, 4); projected.command(0xC8, 2);
+    projected.number(0xD0, .4f);
+    projected.number(0x42, 32); projected.number(0x43, 32); projected.number(0x44, 32767);
+    projected.number(0x45, 32); projected.number(0x46, 32); projected.number(0x47, 32767);
+    projected.command(0x3E, 0);
+    for (float value : std::array<float, 16>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0})
+        projected.number(0x3F, value);
+    projected.draw(); projected.run(ge);
+    expect_pixel(memory, &gl, colors[1]);
+    // Only the higher RAM level changes, while level zero retains its hash.
+    for (unsigned i = 0; i < 32 * 32; ++i) memory.store32(texture + 0x4000 + i * 4, 0xFFFFFFFF);
+    ge.next_frame();
+    draw(1, 16, 4, 64, 1, 0xFFFFFF);
+    for (unsigned level = 0; level < 2; ++level) {
+        const unsigned size = 64 >> level;
+        for (unsigned y = 0; y < size; ++y) for (unsigned x = 0; x < size; ++x)
+            memory.store32(texture + level * 0x4000 + (y * size + x) * 4,
+                           x & 1 ? 0xFFFFFFFF : 0xFF000000);
+    }
+    ge.next_frame();
+    // At mip 1, base coordinate 1.25 becomes .625: a 2/16 linear weight.
+    draw(1, 16, 4, 0, 1, 0, 1.25f);
+    draw(1, 16, 5, 0, 1, 0x1F1F1F, 1.25f);
+    draw(1, 16, 0x104, 0, 1, 0, 1.25f);
+    // Positive detail selects the min filter even when it rounds to mip zero.
+    draw(1, 4, 0x104, 0, 1, 0xFFFFFF, 1.25f);
+    draw(1, -16, 0x104, 0, 1, 0xBFBFBF, 1.25f);
+}
+
+void mipmap_clut_and_vram() {
+    std::cout << "Swizzled indexed mip/cache tests: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl);
+    constexpr std::uint32_t texture = 0x04100000, palette = vertices + 0x1000;
+    const std::array<unsigned, 8> colors = {0x102030, 0x203040, 0x304050, 0x405060,
+                                          0x506070, 0x607080, 0x708090, 0x8090A0};
+    for (unsigned i = 0; i < 256; ++i) memory.store32(palette + i * 4, 0xFF000000);
+    for (unsigned level = 0; level < 8; ++level) {
+        memory.store32(palette + level * 16 * 4, colors[level] | 0xFF000000);
+        // Fixed pitch 128 texels: each 16-byte by 8-row swizzle tile is backed.
+        const unsigned bytes = ((std::max(128u >> level, 1u) + 7) / 8) * 512;
+        for (unsigned i = 0; i < bytes; ++i) memory.store8(texture + level * 0x4000 + i, 0);
+    }
+    memory.store32(palette + 113 * 4, 0xFFFFFFFF);
+    const std::array<float, 10> data = {0, 0, 0, 0, 0, 128, 128, 64, 64, 0};
+    for (unsigned i = 0; i < data.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(data[i]));
+    auto draw = [&](unsigned level, bool shared, unsigned expected) {
+        DisplayList dl(memory);
+        dl.command(0x9C, 0); dl.command(0x9D, 64); dl.command(0xD2, 3);
+        dl.command(0xD4, 0); dl.command(0xD5, 63 | (63 << 10));
+        dl.command(0x12, 3u | (3u << 7u) | (1u << 23)); dl.command(0x1E, 1);
+        for (unsigned mip = 0; mip < 8; ++mip) {
+            dl.command(0xA0 + mip, (texture + mip * 0x4000) & 0xFFFFFF);
+            dl.command(0xA8 + mip, 0x040080);
+            dl.command(0xB8 + mip, (7 - mip) | ((7 - mip) << 8));
+        }
+        dl.command(0xC2, (7 << 16) | (shared ? 0 : 0x100) | 1);
+        dl.command(0xC3, 4); dl.command(0xC9, 3); dl.command(0xC6, 4);
+        dl.command(0xB0, palette & 0xFFFFFF); dl.command(0xB1, 0x080000);
+        dl.command(0xC5, 0xFF03); dl.command(0xC4, 32);
+        dl.command(0xC8, 1 | (level * 16 << 16)); dl.draw(6, 2); dl.run(ge);
+        expect_pixel(memory, &gl, expected);
+    };
+    for (unsigned level = 0; level < 8; ++level) draw(level, false, colors[level]);
+    draw(7, true, colors[0]);
+    draw(7, false, colors[7]);
+    // Same frame, same base pixels, same palette: only mip 7's VRAM changes.
+    memory.store8(texture + 7 * 0x4000, 0x11);
+    ge.touch_vram(texture + 7 * 0x4000, 1);
+    draw(7, false, 0xFFFFFF);
+}
+
 // Minification and magnification are independent GE filter settings. Use a
 // striped texture with known fractional sample positions in both regimes.
 void texture_filters() {
@@ -899,5 +1032,7 @@ int main() {
     doubled_destination_alpha(true);
     render_target_precision(true);
     texture_filters();
-    std::cout << "GE shared software/GLES3 tests and GLES3 min/mag filter tests passed\n";
+    texture_mipmaps();
+    mipmap_clut_and_vram();
+    std::cout << "GE shared software/GLES3 tests and GLES3 filter/mipmap tests passed\n";
 }

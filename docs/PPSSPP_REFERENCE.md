@@ -67,6 +67,28 @@ The filter investigation found an independent source bug: host minification and 
 
 The latest web package is `build/static-ncaa10-texture-filter`; web build, ten native suites, eight package cases and ULUS10440 identity verification pass. Browser inventory exposed no browser and IAB creation failed, so this source change has no fresh live browser gameplay verification. The temporary server was stopped. Default guest memory remains 64 MiB / 56 MiB user partition.
 
+## Regular mip-chain implementation
+
+A subsequent state inspection found a separate concrete omission: final SDSU primitive 5215 sets dither enable `0x20=1`, blend enable `0x21=0` and RGB565 target `D2=0`. The captured signed matrix is `[-4,0,-3,1; 2,-2,3,-1; -3,1,-4,0; 3,-1,2,-2]`. `final-draw-dither-state.json` preserves its relevant registers. Neither current backend implements ordered dithering. This is the next synthetic-pixel regression target; its contribution to the scene difference has not yet been measured.
+
+The subsequent source change addresses a confirmed missing path: only base texture data reached GLES even when a display list requested other mip levels. A synthetic red/green/blue chain selected green mip 1 but returned red level 0 before the change. Regular chains now decode from each level's address/stride/size, share one cache entry and GL texture, and revalidate higher-level content. Cache capacity includes all mip texels; GL uploads and state hashes include the chain. Swizzled byte coverage includes complete 16-byte by 8-row tiles. Indexed chains honor shared versus per-level palettes.
+
+The shader handles automatic, constant (including alias mode 3) and slope selection with signed sixteenth-level bias, exponent/mantissa LOD approximation and four-bit filter fractions. Slope uses screen-linear clip w; automatic derivatives are converted to native PSP pixel units at higher render scales. Within-level and between-level interpolation operate on decoded byte channels. Mip-capable samplers are required on the tested ANGLE/GLES path even for explicit texel fetches; uploaded higher levels otherwise sampled black. Non-mipmapped textures retain the preceding sampler path. These independently implemented semantics were checked against the pinned [GPU state definitions](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/GPUState.h) and [software sampling parameter calculation](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/Rasterizer.cpp).
+
+Regressions cover all eight levels, nearest and mixed mip selection, signed bias/clamping, all LOD modes, disabling mipmaps, min/mag choice near zero detail, within-level filtering, shared/per-level CLUTs, swizzle, higher-level RAM and same-frame VRAM changes, perspective slope and 2× rendering. The existing lighting/depth/blend/target-precision fixtures still pass.
+
+| Same direct software reference | Before mip support | After mip support |
+| --- | --- | --- |
+| SDSU full RGB MAE | 4.7815 | 4.6312 |
+| SDSU field ROI MAE | 5.3183 | 5.2904 |
+| Georgia Tech–Georgia full RGB MAE | 5.1176 | 5.0452 |
+
+The earlier hardware-window method slightly worsens for SDSU: full RGB MAE 7.6379 to 7.6518, field ROI 5.3813 to 5.5334. This is retained in `comparison.json`. The software and window metrics disagree; neither proves PSP hardware fidelity. Slope/LOD behavior follows the studied software reference and still needs independent hardware validation.
+
+Final source replays preserve primitive/draw counts, zero GPU downloads and two uploads in each capture. The coarse field noise is reduced, but field/player shading differences remain. Evidence: `recomp-mipmaps.png`, `mipmaps-replay.log`, `mipmap-comparison.png` and updated `verified-software-comparison.json` in each capture folder. The three-column image is software reference / preceding renderer / mip-enabled renderer. It is a native replay comparison, not fresh browser gameplay or PSP hardware proof.
+
+Current scope: regular, backed mip chains; malformed/irregular chains stop at their valid prefix. That fallback, complete hardware LOD/raster precision and all filter edge cases are unverified. GPU-rendered mip chains can require coherent CPU readback; the supplied frames do not trigger it. The software diagnostic backend still samples level zero. Broader blend, alpha/stencil/dithering and scene fidelity remain open. Web build/package and ten native suites pass, but no browser was available to automation for fresh gameplay or sustained FPS measurement. Package: `build/static-ncaa10-mipmaps`; default guest memory stays 64 MiB.
+
 ## Authorized live SDSU heap inspection
 
 The user opened the original reference's memory viewer and authorized inspection. Read-only debugger mapping confirms 32 MiB RAM / 24 MiB user memory and the active NCAA2007 module. A brief debugger pause captured `build/reference-ppsspp/sdsu-live-32mib-20261013.ram`; the following resume completed. `sdsu-live-main-heap.json` was produced with `scripts/analyze_ncaa_heap.py`.

@@ -48,6 +48,10 @@ Paths are relative to the repository root containing `scripts` and `profile`. Ex
 
 ## Preparing a useful patch or report
 
+**Treat a mip chain as one cache resource.** Include each level's layout and content in cache identity/revalidation, count all decoded texels toward capacity, and keep pending draws from observing mutated data. Test a higher-level-only RAM update and a same-frame VRAM write while the base hash remains unchanged. Use distinct level colors and per-level indexed palettes to reveal incorrect selection and CLUT sharing. Explicit texel fetch still needs an appropriate sampler and backed mip chain on the tested GLES path.
+
+**Keep LOD in guest pixel units.** Host resolution scaling must not silently shift the selected mip. Check automatic derivatives, signed constant bias, slope with varying clip w, nearest-level rounding and interpolation fractions separately. Compare the same captured frame after the change; unchanged draw counts alone do not establish unchanged GPU cost or full browser FPS.
+
 **Keep minification and magnification separate.** GE `TEXFILTER` carries independent settings. Test a striped texture at both shrinking and enlarging scales, change only one filter and revisit the original state. Include wrap/clamp combinations to exercise sampler-cache selection. This validates filtering within one mip level; mip selection and interpolation between levels require their own fixtures.
 
 **Separate reference methods.** A coherent, repeatable software-rendered VRAM capture avoids window scaling, but is still a software reference rather than hardware proof. Report its format, stride, hashes and capture consistency, and retain hardware-window results separately. The same change can improve one metric and worsen the other.

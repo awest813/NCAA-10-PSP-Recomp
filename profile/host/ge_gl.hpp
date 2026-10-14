@@ -18,6 +18,7 @@
 #include <GLES3/gl3.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -62,6 +63,10 @@ struct GlDrawState {
     bool tex_alpha{}, tex_double{};
     std::uint32_t env{};
     bool clamp_u{}, clamp_v{}, min_linear{}, mag_linear{};
+    std::uint32_t mip_count{}, lod_mode{};
+    bool mip_linear{};
+    float lod_bias{}, lod_slope{1};
+    std::array<const std::uint32_t *, 7> mip_texels{};
     // Texture source: decoded texels, or a surface region at tex_address.
     const std::uint32_t *texels{};
     const void *texture_identity{};
@@ -182,7 +187,7 @@ private:
     struct GlTexture {
         GLuint id{};
         std::uint64_t hash{};
-        std::uint32_t width{}, height{};
+        std::uint32_t width{}, height{}, mip_count{};
     };
 
     [[nodiscard]] static std::uint32_t bpp_of(std::uint32_t format) { return format == 3u ? 4u : 2u; }
@@ -257,7 +262,7 @@ private:
     void set_uniform(GLint location, float a, float b = 0.0f, float c = 0.0f, int count = 1);
     void set_uniform_int(GLint location, int value);
     Cache cache_{};
-    GLuint samplers_[16]{};
+    GLuint samplers_[32]{};
 
     psprecomp::GuestMemory &memory_;
     GLuint program_{}, present_program_{};
@@ -271,6 +276,7 @@ private:
     GLint u_tex_alpha_{}, u_tex_double_{}, u_env_{}, u_alpha_test_{}, u_alpha_func_{}, u_alpha_ref_{}, u_alpha_mask_{};
     GLint u_output_format_{}, u_blend_alpha_to_rgb_{}, u_src_scale_{}, u_clear_{}, u_tex_window_{}, u_tex_clamp_{};
     GLint u_fog_enable_{}, u_fog_color_{};
+    GLint u_lod_params_{}, u_lod_limits_{}, u_lod_filter_{};
     GLint u_present_tex_{}, u_present_rect_{}, u_present_origin_{};
     GLuint reinterpret_program_{};
     GLint u_ri_src_{}, u_ri_mode_{}, u_ri_format_{}, u_ri_delta_{}, u_ri_row_bytes_{}, u_ri_src_size_{};

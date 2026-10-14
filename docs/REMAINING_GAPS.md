@@ -2,7 +2,7 @@
 
 Updated 2026-10-13. Target: NCAA Football 10 PSP US, ULUS10440, AOT C++/WebAssembly. Default guest RAM is 64 MiB, with a 56 MiB user partition. This checklist tracks evidence, not a promise of full compatibility.
 
-Latest rendering evidence: independent min/mag filtering now passes shrinking/enlarging and wrap/clamp regressions. Verified direct PPSSPP software VRAM comparisons cover SDSU daytime (RGB MAE 4.7815) and Georgia Tech–Georgia pause (5.1176). Neither frame is exact; the filter fix leaves those metrics unchanged. Mip selection/blending, residual field/player differences and broader blend/precision coverage remain open. Latest package `build/static-ncaa10-texture-filter` passes build/package/native checks. A fresh browser gameplay check could not run because no browser was exposed to automation. See [reference evidence](PPSSPP_REFERENCE.md) for capture methods and exclusions.
+Latest rendering evidence: regular mip chains now reach GLES/WebGL with automatic/constant/slope LOD, signed bias, four-bit filtering, per-level content revalidation and indexed palette handling. Direct software-reference RGB MAE improves to 4.6312 for SDSU and 5.0452 for Georgia Tech-Georgia; neither frame is exact. Tests cover all eight levels, perspective slope, 2x scale and higher-level RAM/VRAM changes. The software diagnostic rasterizer still samples level zero; irregular chains, hardware precision, residual shading and broader blending remain open. Latest package build/static-ncaa10-mipmaps passes web/package/native checks. No browser is exposed to automation for fresh gameplay/FPS testing. See [reference evidence](PPSSPP_REFERENCE.md) for methods and limits.
 
 | Work | Current evidence | Required next result |
 | --- | --- | --- |

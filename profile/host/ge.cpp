@@ -1372,12 +1372,15 @@ std::uint32_t Ge::texture_bytes(std::uint32_t format, std::uint32_t buf_width, s
         return blocks * (format == 8u ? 8u : 16u);
     }
     static constexpr std::uint32_t bits_per_texel[8] = {16, 16, 16, 32, 4, 8, 16, 32};
+    if ((regs_[kTexMode] & 1u) != 0u) {
+        const std::uint32_t row_bytes = (buf_width * bits_per_texel[format & 7u] + 7u) / 8u;
+        return ((row_bytes + 15u) / 16u) * ((height + 7u) / 8u) * 128u;
+    }
     return (buf_width * height * bits_per_texel[format & 7u] + 7u) / 8u;
 }
 
-// Finds or decodes the bound level-0 texture.  RAM textures are trusted for
-// the rest of the frame once validated; VRAM textures (render targets) are
-// revalidated whenever the GE may have drawn since.
+// Cache a regular mip chain as one unit. RAM is revalidated each frame;
+// every VRAM level is also revalidated after writes to its covered pages.
 void Ge::bind_texture() {
     SectionTimer timer{2};
     texture_ = nullptr;
@@ -1389,25 +1392,49 @@ void Ge::bind_texture() {
     const std::uint32_t height = 1u << std::min((regs_[kTexSize0] >> 8u) & 0xFu, 9u);
     const std::uint32_t buf_width = std::max(regs_[kTexBufWidth0] & 0x7FFu, 1u);
     const bool clut = format >= 4u && format <= 7u;
-    const TextureKey key{address, format, width, height, buf_width, regs_[kTexMode] & 1u,
-                         clut ? regs_[kClutFormat] : 0u, clut ? clut_hash_ : 0u};
+    TextureKey key{address, format, width, height, buf_width, regs_[kTexMode] & 1u,
+                   clut ? regs_[kClutFormat] : 0u, clut ? clut_hash_ : 0u};
+    key.mip_clut = clut ? regs_[kTexMode] & 0x100u : 0u;
     texture_width_ = static_cast<int>(width);
     texture_height_ = static_cast<int>(height);
-
-    const bool in_vram = (address & 0x0F000000u) == 0x04000000u;
-    const std::uint32_t bytes = texture_bytes(format, buf_width, std::max(height, 1u));
-    // GL drawing does not write VRAM; pull in GPU pixels this texture covers.
-    if (gl_ != nullptr && in_vram) gl_->prepare_vram_read(address, bytes); // may touch_vram()
-    const std::uint64_t stamp = in_vram ? vram_stamp(address, bytes) : 0u;
+    const unsigned requested = gl_ != nullptr && (regs_[0xC6] & 4u) != 0u
+        ? std::min((regs_[kTexMode] >> 16u) & 7u, std::bit_width(std::max(width, height)) - 1u) : 0u;
+    std::array<std::uint32_t, 8> addresses{}, widths{}, heights{}, strides{}, lengths{};
+    std::array<const std::uint8_t *, 8> sources{};
+    bool in_vram = false;
+    std::uint64_t stamp = 0, texel_count = 0;
+    for (unsigned level = 0; level <= requested; ++level) {
+        addresses[level] = (regs_[kTexAddr0 + level] & 0xFFFFF0u) | ((regs_[kTexBufWidth0 + level] & 0x0F0000u) << 8u);
+        widths[level] = 1u << std::min(regs_[kTexSize0 + level] & 0xFu, 9u);
+        heights[level] = 1u << std::min((regs_[kTexSize0 + level] >> 8u) & 0xFu, 9u);
+        strides[level] = std::max(regs_[kTexBufWidth0 + level] & 0x7FFu, 1u);
+        if (level && (widths[level] != std::max(width >> level, 1u) ||
+                      heights[level] != std::max(height >> level, 1u))) break;
+        lengths[level] = texture_bytes(format, strides[level], heights[level]);
+        sources[level] = memory_.raw_pointer(addresses[level], lengths[level]);
+        if (sources[level] == nullptr) { if (level == 0) return; break; }
+        if ((addresses[level] & 0x0F000000u) == 0x04000000u) {
+            in_vram = true;
+            if (gl_ != nullptr) gl_->prepare_vram_read(addresses[level], lengths[level]);
+            stamp = std::max(stamp, vram_stamp(addresses[level], lengths[level]));
+        }
+        texel_count += static_cast<std::uint64_t>(widths[level]) * heights[level];
+        if (level) {
+            key.mip_count = level;
+            key.mip_regs[(level - 1) * 3] = addresses[level];
+            key.mip_regs[(level - 1) * 3 + 1] = strides[level];
+            key.mip_regs[(level - 1) * 3 + 2] = regs_[kTexSize0 + level] & 0xF0Fu;
+        }
+    }
     auto found = textures_.find(key);
     if (found != textures_.end() && found->second.frame == frame_ &&
         (!in_vram || found->second.vram_generation == stamp)) {
         texture_ = &found->second;
         return;
     }
-    const std::uint8_t *source = memory_.raw_pointer(address, bytes);
-    if (source == nullptr) return; // fall back to direct sampling
-    const std::uint64_t hash = hash_bytes(source, bytes);
+    std::uint64_t hash = hash_bytes(sources[0], lengths[0]);
+    for (unsigned level = 1; level <= key.mip_count; ++level)
+        hash = (hash ^ hash_bytes(sources[level], lengths[level])) * 0x100000001B3ull;
     if (found != textures_.end() && found->second.source_hash == hash) {
         found->second.frame = frame_;
         found->second.vram_generation = stamp;
@@ -1415,16 +1442,21 @@ void Ge::bind_texture() {
         return;
     }
     if (found == textures_.end()) {
-        if (texture_cache_texels_ + width * height > kTextureCacheTexelLimit) evict_textures(width * height);
+        if (texture_cache_texels_ + texel_count > kTextureCacheTexelLimit) evict_textures(texel_count);
         found = textures_.emplace(key, CachedTexture{}).first;
-        texture_cache_texels_ += width * height;
+        texture_cache_texels_ += texel_count;
     }
     CachedTexture &cached = found->second;
-    if (gl_ != nullptr) gl_->flush(); // pending GPU draws must not see the new contents
-    cached.texels.resize(static_cast<std::size_t>(width) * height);
-    for (std::uint32_t y = 0; y < height; ++y)
-        for (std::uint32_t x = 0; x < width; ++x)
-            cached.texels[y * width + x] = fetch_texel(static_cast<int>(x), static_cast<int>(y));
+    if (gl_ != nullptr) gl_->flush();
+    for (unsigned level = 0; level <= key.mip_count; ++level) {
+        auto &texels = level ? cached.mips[level - 1] : cached.texels;
+        texels.resize(static_cast<std::size_t>(widths[level]) * heights[level]);
+        for (std::uint32_t y = 0; y < heights[level]; ++y)
+            for (std::uint32_t x = 0; x < widths[level]; ++x)
+                texels[y * widths[level] + x] = fetch_texel(static_cast<int>(x), static_cast<int>(y), level);
+    }
+    cached.mip_count = key.mip_count;
+    cached.texel_count = texel_count;
     cached.source_hash = hash;
     cached.frame = frame_;
     cached.vram_generation = stamp;
@@ -1442,7 +1474,7 @@ void Ge::evict_textures(std::uint64_t need) {
         if (texture_cache_texels_ + need <= goal) break;
         const auto it = textures_.find(key);
         if (gl_ != nullptr) gl_->forget_texture(&it->second);
-        texture_cache_texels_ -= static_cast<std::uint64_t>(key.width) * key.height;
+        texture_cache_texels_ -= it->second.texel_count;
         textures_.erase(it);
     }
 }
@@ -1542,11 +1574,12 @@ void Ge::prepare_pixel_state() {
     p.sy2 = static_cast<int>((regs_[kScissor2] >> 10u) & 0x3FFu);
 }
 
-std::uint32_t Ge::clut_lookup(std::uint32_t index) const {
+std::uint32_t Ge::clut_lookup(std::uint32_t index, unsigned level) const {
     const std::uint32_t mode = regs_[kClutFormat];
     const std::uint32_t format = mode & 3u, shift = (mode >> 2u) & 0x1Fu, mask = (mode >> 8u) & 0xFFu;
     const std::uint32_t start = ((mode >> 16u) & 0x1Fu) << 4u;
-    const std::uint32_t i = ((index >> shift) & mask) | start;
+    const std::uint32_t i = (((index >> shift) & mask) | start) +
+                            ((regs_[kTexMode] & 0x100u) != 0u ? level * 16u : 0u);
     if (format == 3u) {
         const std::uint32_t at = (i * 4u) & 0x7FCu;
         return static_cast<std::uint32_t>(clut_[at]) | (static_cast<std::uint32_t>(clut_[at + 1u]) << 8u) |
@@ -1556,10 +1589,10 @@ std::uint32_t Ge::clut_lookup(std::uint32_t index) const {
     return decode16(static_cast<std::uint32_t>(clut_[at]) | (static_cast<std::uint32_t>(clut_[at + 1u]) << 8u), format);
 }
 
-std::uint32_t Ge::fetch_texel(int x, int y) const {
+std::uint32_t Ge::fetch_texel(int x, int y, unsigned level) const {
     const std::uint32_t format = regs_[kTexFormat] & 0xFu;
-    const std::uint32_t address = (regs_[kTexAddr0] & 0xFFFFF0u) | ((regs_[kTexBufWidth0] & 0x0F0000u) << 8u);
-    const std::uint32_t buf_width = std::max(regs_[kTexBufWidth0] & 0x7FFu, 1u);
+    const std::uint32_t address = (regs_[kTexAddr0 + level] & 0xFFFFF0u) | ((regs_[kTexBufWidth0 + level] & 0x0F0000u) << 8u);
+    const std::uint32_t buf_width = std::max(regs_[kTexBufWidth0 + level] & 0x7FFu, 1u);
     const auto ux = static_cast<std::uint32_t>(x), uy = static_cast<std::uint32_t>(y);
 
     if (format >= 8u) { // DXT1/3/5: 4x4 blocks
@@ -1624,10 +1657,10 @@ std::uint32_t Ge::fetch_texel(int x, int y) const {
     switch (format) {
     case 0: case 1: case 2: return decode16(memory_.load16(at), format);
     case 3: return memory_.load32(at);
-    case 4: return clut_lookup((memory_.load8(at) >> ((ux & 1u) * 4u)) & 0xFu);
-    case 5: return clut_lookup(memory_.load8(at));
-    case 6: return clut_lookup(memory_.load16(at));
-    default: return clut_lookup(memory_.load32(at));
+    case 4: return clut_lookup((memory_.load8(at) >> ((ux & 1u) * 4u)) & 0xFu, level);
+    case 5: return clut_lookup(memory_.load8(at), level);
+    case 6: return clut_lookup(memory_.load16(at), level);
+    default: return clut_lookup(memory_.load32(at), level);
     }
 }
 
@@ -1785,7 +1818,8 @@ void Ge::submit_gl_state() {
         const std::uint32_t address = (regs_[kTexAddr0] & 0xFFFFF0u) | ((regs_[kTexBufWidth0] & 0x0F0000u) << 8u);
         const std::uint32_t format = regs_[kTexFormat] & 0xFu;
         const std::uint32_t buf_width = regs_[kTexBufWidth0] & 0x7FFu;
-        if (format <= 3u && gl_->is_gpu_target(address, format, buf_width)) {
+        if (format <= 3u && ((regs_[0xC6] & 4u) == 0u || ((regs_[kTexMode] >> 16u) & 7u) == 0u) &&
+            gl_->is_gpu_target(address, format, buf_width)) {
             st.tex_from_target = true;
             st.tex_address = address;
             st.tex_format = format;
@@ -1798,6 +1832,13 @@ void Ge::submit_gl_state() {
                 st.texels = texture_->texels.data();
                 st.texture_identity = texture_;
                 st.texture_hash = texture_->source_hash;
+                st.mip_count = texture_->mip_count;
+                st.mip_linear = (regs_[0xC6] & 2u) != 0u;
+                st.lod_mode = regs_[0xC8] & 3u;
+                st.lod_bias = static_cast<float>(static_cast<std::int8_t>(regs_[0xC8] >> 16u)) / 16.0f;
+                st.lod_slope = cmd_float(regs_[0xD0]);
+                for (unsigned level = 1; level <= st.mip_count; ++level)
+                    st.mip_texels[level - 1] = texture_->mips[level - 1].data();
                 st.tex_width = static_cast<std::uint32_t>(texture_width_);
                 st.tex_height = static_cast<std::uint32_t>(texture_height_);
             } else {
