@@ -3,7 +3,9 @@
 // OpenGL ES 3 / WebGL2 backend for the GE.  The Ge front end keeps vertex
 // decoding, transform, lighting and clipping on the CPU and hands this class
 // drawing-space triangles plus the render state of each primitive.  Triangles
-// sharing a state are batched into one draw call.
+// sharing a state are batched. Destination-dependent blending splits them
+// into ordered groups with disjoint triangle interiors, each with a GPU copy
+// of the destination region; source-only equations keep the ordinary batch.
 //
 // Framebuffers live in GL "surfaces": one framebuffer object per VRAM region,
 // stride and pixel format.  A framebuffer address that falls inside an existing
@@ -231,6 +233,11 @@ private:
     // Bounds of the pending batch in the PSP pixels of the drawing-space
     // (unshifted) frame, and whether it is a single axis-aligned rectangle.
     [[nodiscard]] Rect batch_bounds(bool &rectangle) const;
+    // Consecutive groups with disjoint triangle interiors can share one
+    // destination snapshot. Overlap starts a new ordered group.
+    void build_blend_groups();
+    void snapshot_destination(const Rect &region);
+    [[nodiscard]] bool blend_reads_destination() const;
     void resolve_stencil(Surface &s);                    // colour alpha -> stencil where it is stale
     // Call before colour alpha in `r` is overwritten from VRAM or another surface.
     void alpha_will_change(Surface &s, const Rect &r);
@@ -249,12 +256,11 @@ private:
         GLint scissor[4]{-1, -1, -1, -1};
         int scissor_test{-1}, depth_test{-1}, blend{-1}, stencil_test{-1};
         std::uint64_t stencil_key{~0ull};
-        GLenum depth_func{0}, blend_src{0}, blend_dst{0}, blend_eq{0};
+        GLenum depth_func{0};
         int depth_mask{-1};
         int color_mask{-1};
-        float blend_color[4]{-1, -1, -1, -1};
-        float uniforms[32][4];
-        bool uniform_valid[32]{};
+        float uniforms[64][4];
+        bool uniform_valid[64]{};
         bool dither_rows_valid{};
         std::array<std::uint32_t, 4> dither_rows{};
     };
@@ -278,7 +284,10 @@ private:
     std::vector<std::uint32_t> indices_;
     GLint u_target_{}, u_origin_{}, u_tex_{}, u_tex_enable_{}, u_tex_size_{}, u_tex_origin_{}, u_tex_func_{};
     GLint u_tex_alpha_{}, u_tex_double_{}, u_env_{}, u_alpha_test_{}, u_alpha_func_{}, u_alpha_ref_{}, u_alpha_mask_{};
-    GLint u_output_format_{}, u_blend_alpha_to_rgb_{}, u_src_scale_{}, u_clear_{}, u_tex_window_{}, u_tex_clamp_{};
+    GLint u_output_format_{}, u_clear_{}, u_tex_window_{}, u_tex_clamp_{};
+    GLint u_shader_blend_{}, u_destination_{}, u_read_destination_{}, u_blend_src_{}, u_blend_dst_{}, u_blend_equation_{}, u_fix_a_{}, u_fix_b_{};
+    GLuint destination_texture_{};
+    GLsizei destination_width_{}, destination_height_{};
     GLint u_fog_enable_{}, u_fog_color_{};
     GLint u_lod_params_{}, u_lod_limits_{}, u_lod_filter_{};
     GLint u_dither_{}, u_dither_rows_{};
@@ -298,6 +307,8 @@ private:
     std::deque<Surface> surfaces_;
     std::unordered_map<const void *, GlTexture> textures_;
     std::vector<GlVertex> batch_;
+    std::vector<std::size_t> blend_group_ends_;
+    std::vector<Rect> blend_group_bounds_, triangle_bounds_;
     GlDrawState state_{};
     bool state_valid_{};
     Surface *current_{};
@@ -308,6 +319,7 @@ public:
     // Extra GL passes per kind, for profiling.
     struct PassCounters {
         std::uint64_t alpha_resolves{}, stencil_resolves{}, reinterprets{}, feedback_copies{}, blits{};
+        std::uint64_t blend_copies{}, blend_pixels{};
         std::uint64_t pixels{}; // output pixels those passes touched, at the internal resolution
     };
     [[nodiscard]] const PassCounters &passes() const noexcept { return passes_; }

@@ -1296,29 +1296,33 @@ void Ge::shade_pixel(int x, int y, float z, float u, float v, float r, float g, 
 
     const std::uint32_t old = load_fb();
     if (p.blend) {
+        for (float &channel : color) channel = std::floor(channel);
         const float dst[4] = {static_cast<float>(old & 0xFFu), static_cast<float>((old >> 8u) & 0xFFu),
                               static_cast<float>((old >> 16u) & 0xFFu), static_cast<float>(old >> 24u)};
-        const float sa = color[3] * (1.0f / 255.0f);
+        const auto sa = static_cast<unsigned>(color[3]);
         // 565 textures are opaque, but a 565 destination has no alpha/stencil
         // channel: destination-alpha blend factors read zero.
-        const float da = p.fb_format == 0u ? 0.0f : dst[3] * (1.0f / 255.0f);
-        auto factor = [&](std::uint32_t f, bool is_src, int k) -> float {
+        const auto da = p.fb_format == 0u ? 0u : static_cast<unsigned>(dst[3]);
+        auto factor = [&](std::uint32_t f, bool is_src, int k) -> unsigned {
             switch (f) {
-            case 0: return (is_src ? dst[k] : color[k]) * (1.0f / 255.0f);
-            case 1: return 1.0f - (is_src ? dst[k] : color[k]) * (1.0f / 255.0f);
+            case 0: return static_cast<unsigned>(is_src ? dst[k] : color[k]);
+            case 1: return 255u - static_cast<unsigned>(is_src ? dst[k] : color[k]);
             case 2: return sa;
-            case 3: return 1.0f - sa;
+            case 3: return 255u - sa;
             case 4: return da;
-            case 5: return 1.0f - da;
-            case 6: return 2.0f * sa;
-            case 7: return 1.0f - 2.0f * sa;
-            case 8: return 2.0f * da;
-            case 9: return 1.0f - 2.0f * da;
-            default: return (is_src ? p.fix_a[k] : p.fix_b[k]) * (1.0f / 255.0f);
+            case 5: return 255u - da;
+            case 6: return 2u * sa;
+            case 7: return 255u - std::min(2u * sa, 255u);
+            case 8: return 2u * da;
+            case 9: return 255u - std::min(2u * da, 255u);
+            default: return static_cast<unsigned>(is_src ? p.fix_a[k] : p.fix_b[k]);
             }
         };
         for (int k = 0; k < 3; ++k) {
-            const float s = color[k] * factor(p.src_factor, true, k), d = dst[k] * factor(p.dst_factor, false, k);
+            const float s = static_cast<float>(((2u * static_cast<unsigned>(color[k]) + 1u) *
+                                               (2u * factor(p.src_factor, true, k) + 1u)) >> 10u);
+            const float d = static_cast<float>(((2u * static_cast<unsigned>(dst[k]) + 1u) *
+                                               (2u * factor(p.dst_factor, false, k) + 1u)) >> 10u);
             float result;
             switch (p.equation) {
             case 0: result = s + d; break;
@@ -1326,7 +1330,8 @@ void Ge::shade_pixel(int x, int y, float z, float u, float v, float r, float g, 
             case 2: result = d - s; break;
             case 3: result = std::min(color[k], dst[k]); break;
             case 4: result = std::max(color[k], dst[k]); break;
-            default: result = std::fabs(color[k] - dst[k]); break;
+            case 5: result = std::fabs(color[k] - dst[k]); break;
+            default: result = color[k]; break;
             }
             color[k] = result;
         }

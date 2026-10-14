@@ -727,6 +727,194 @@ void doubled_destination_alpha(bool use_gl) {
     }
 }
 
+void exact_blend_rounding(bool use_gl) {
+    std::cout << "Exact blend rounding: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    const std::array<float, 6> data = {0, 0, 0, 64, 64, 0};
+    for (unsigned i = 0; i < data.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(data[i]));
+    auto draw = [&](unsigned alpha, unsigned equation, unsigned source_factor, unsigned dest_factor,
+                    unsigned expected, unsigned destination_alpha = 0) {
+        DisplayList background(memory);
+        background.command(0x9C, 0); background.command(0x9D, 64); background.command(0xD2, 3);
+        background.command(0xD4, 0); background.command(0xD5, 63 | (63 << 10));
+        background.command(0x12, (3u << 7u) | (1u << 23));
+        background.command(0x21, 0); background.command(0xD3, 0x301);
+        background.command(0x55, 0x489A79); background.command(0x58, destination_alpha);
+        background.draw(6, 2); background.run(ge);
+        DisplayList overlay(memory);
+        overlay.command(0xD3, 0); overlay.command(0x21, 1);
+        overlay.command(0xDF, source_factor | (dest_factor << 4) | (equation << 8));
+        overlay.command(0xE0, 0xA06020); overlay.command(0xE1, 0x4080C0);
+        overlay.command(0x55, 0x103F28); overlay.command(0x58, alpha);
+        overlay.draw(6, 2); overlay.run(ge);
+        expect_pixel(memory, use_gl ? &gl : nullptr, expected);
+    };
+    // Captured first-divergent draw: source (40,63,16), alpha 21,
+    // destination (121,154,72), separate rounded products -> (114,146,67).
+    draw(21, 0, 2, 3, 0x439272);
+    const std::array<unsigned, 9> alphas = {0, 1, 21, 64, 127, 128, 192, 254, 255};
+    const std::array<unsigned, 9> colors = {0x489A79, 0x489978, 0x439272, 0x3A8264, 0x2C6C50,
+                                           0x2C6B50, 0x1D553C, 0x103F28, 0x103F28};
+    for (unsigned i = 0; i < alphas.size(); ++i) draw(alphas[i], 0, 2, 3, colors[i]);
+    const std::array<unsigned, 5> equations = {0, 0x41886C, 0x103F28, 0x489A79, 0x385B51};
+    for (unsigned equation = 1; equation <= 5; ++equation) draw(21, equation, 2, 3, equations[equation - 1]);
+    draw(21, 6, 2, 3, 0x103F28); draw(21, 7, 2, 3, 0x103F28); // Software-reference reserved behavior.
+    const std::array<unsigned, 11> factors = {0x084C26, 0x4E8D7B, 0x07110D, 0x51C794, 0x44AA7E,
+                                             0x122E22, 0x0E231A, 0x49B486, 0x8AFFFD, 0, 0x1C6460};
+    for (unsigned factor = 0; factor < factors.size(); ++factor) draw(21, 0, factor, factor, factors[factor], 200);
+    draw(21, 0, 15, 15, factors.back(), 200); // Reserved factors use the fixed colors.
+}
+
+void ordered_blend_gpu() {
+    std::cout << "Ordered GPU blend/depth/stencil/packing tests" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl);
+    auto geometry = [&](float x0, float x1, float z = 0) {
+        const std::array<float, 6> data = {x0, 0, z, x1, 64, z};
+        for (unsigned i = 0; i < data.size(); ++i)
+            memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(data[i]));
+    };
+    auto background = [&](unsigned rgb = 0, unsigned alpha = 64, unsigned format = 3, bool depth = false) {
+        DisplayList dl(memory);
+        dl.command(0x9C, 0); dl.command(0x9D, 64); dl.command(0xD2, format);
+        dl.command(0x9E, 0x100000); dl.command(0x9F, 64);
+        dl.command(0xD4, 0); dl.command(0xD5, 63 | (63 << 10));
+        dl.command(0x12, (3u << 7u) | (1u << 23));
+        dl.command(0x20, 0); dl.command(0x21, 0); dl.command(0x23, 0); dl.command(0x24, 0);
+        dl.command(0xD3, depth ? 0x701 : 0x301); dl.command(0x55, rgb); dl.command(0x58, alpha);
+        dl.draw(6, 2); dl.run(ge); gl.flush();
+    };
+    auto overlay = [&](unsigned repeats, unsigned rgb = 0xFFFFFF, unsigned alpha = 128) {
+        DisplayList dl(memory);
+        dl.command(0xD3, 0); dl.command(0x21, 1); dl.command(0xDF, 2 | (3 << 4));
+        dl.command(0x55, rgb); dl.command(0x58, alpha);
+        for (unsigned i = 0; i < repeats; ++i) dl.draw(6, 2);
+        dl.run(ge);
+    };
+    for (int scale : {1, 2}) {
+        assert(gl.set_render_scale(scale) == scale);
+        for (unsigned repeats : {1u, 2u, 3u}) {
+            geometry(0, 64); background();
+            const auto copies = gl.passes().blend_copies, draws = gl.draw_calls(), downloads = gl.downloads();
+            overlay(repeats); gl.flush();
+            assert(gl.downloads() == downloads);
+            assert(gl.passes().blend_copies - copies == repeats);
+            assert(gl.draw_calls() - draws == repeats); // Shared quad edges need no extra copy.
+            const unsigned expected = repeats == 1 ? 0x808080 : repeats == 2 ? 0xBFBFBF : 0xDFDFDF;
+            expect_pixel(memory, &gl, expected);
+            assert(memory.load32(sample) >> 24 == 64); // Source alpha never overwrites stencil.
+        }
+        geometry(0, 64); background();
+        const auto copies = gl.passes().blend_copies, draws = gl.draw_calls();
+        geometry(0, 16); overlay(1);
+        geometry(32, 48); overlay(1); gl.flush();
+        assert(gl.passes().blend_copies - copies == 1);
+        assert(gl.draw_calls() - draws == 1); // Disjoint quads stay batched.
+        expect_pixel(memory, &gl, 0x808080, 0, 0x04000000 + (32 * 64 + 8) * 4);
+        expect_pixel(memory, &gl, 0x808080, 0, 0x04000000 + (32 * 64 + 40) * 4);
+
+        geometry(0, 64); background();
+        const auto clipped_copies = gl.passes().blend_copies, clipped_draws = gl.draw_calls();
+        geometry(100, 164); overlay(1); gl.flush();
+        assert(gl.passes().blend_copies == clipped_copies && gl.draw_calls() == clipped_draws);
+        expect_pixel(memory, &gl, 0); // Entirely outside the scissor: no GPU work.
+
+        // A relocated framebuffer must snapshot at the actual surface origin.
+        geometry(0, 64); background(); geometry(0, 32);
+        DisplayList alias(memory);
+        alias.command(0x9C, 0x210); alias.run(ge); overlay(1);
+        expect_pixel(memory, &gl, 0x808080, 0, 0x04000000 + 0x210 + (16 * 64 + 16) * 4);
+
+        // Refresh destination alpha between overlapping groups, after stencil
+        // increments. 128*(64/255) -> 32, then 32*(65/255) -> 8.
+        geometry(0, 64); background(0x808080, 64);
+        DisplayList stencil(memory);
+        stencil.command(0xD3, 0); stencil.command(0x21, 1); stencil.command(0xDF, 10 | (4 << 4));
+        stencil.command(0xE0, 0); stencil.command(0x55, 0); stencil.command(0x58, 255);
+        stencil.command(0x24, 1); stencil.command(0xDC, 0xFF0001); stencil.command(0xDD, 4 << 16);
+        stencil.draw(6, 2); stencil.draw(6, 2); stencil.run(ge);
+        expect_pixel(memory, &gl, 0x080808);
+        assert(memory.load32(sample) >> 24 == 66);
+
+        // Source-only equations do not need a destination copy or splitting,
+        // while fixed-function stencil must still observe all three draws.
+        geometry(0, 64); background();
+        const auto source_copies = gl.passes().blend_copies, source_draws = gl.draw_calls();
+        DisplayList source_only(memory);
+        source_only.command(0xD3, 0); source_only.command(0x21, 1); source_only.command(0xDF, 10 | (10 << 4));
+        source_only.command(0xE0, 0xFFFFFF); source_only.command(0xE1, 0); source_only.command(0x55, 0x123456);
+        source_only.command(0x24, 1); source_only.command(0xDC, 0xFF0001); source_only.command(0xDD, 4 << 16);
+        source_only.draw(6, 2); source_only.draw(6, 2); source_only.draw(6, 2); source_only.run(ge); gl.flush();
+        assert(gl.passes().blend_copies == source_copies && gl.draw_calls() - source_draws == 1);
+        expect_pixel(memory, &gl, 0x123456);
+        assert(memory.load32(sample) >> 24 == 67);
+
+        // Source-only self-texturing must take a fresh source snapshot after
+        // each overlapping quad, despite not needing a blend destination.
+        geometry(0, 64); background();
+        const std::array<float, 10> uv = {.5f, .5f, 0, 0, 0, .5f, .5f, 64, 64, 0};
+        for (unsigned i = 0; i < uv.size(); ++i)
+            memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(uv[i]));
+        const auto feedback = gl.passes().feedback_copies, downloads = gl.downloads();
+        DisplayList self(memory);
+        self.command(0x12, 3u | (3u << 7u) | (1u << 23)); self.command(0xD3, 0);
+        self.command(0x24, 0); self.command(0x1E, 1); self.command(0x21, 1); self.command(0xDF, 10 | (10 << 4));
+        self.command(0xE0, 0xFFFFFF); self.command(0xE1, 0); self.command(0x55, 0x404040);
+        self.command(0xA0, 0); self.command(0xA8, 0x040040); self.command(0xB8, 0x606);
+        self.command(0xC2, 0); self.command(0xC3, 3); self.command(0xC6, 0); self.command(0xC7, 0x101);
+        self.command(0xC9, 4); self.draw(6, 2); self.draw(6, 2); self.run(ge); gl.flush();
+        assert(gl.downloads() == downloads && gl.passes().feedback_copies - feedback == 2);
+        expect_pixel(memory, &gl, 0x808080);
+
+        DisplayList untexture(memory); untexture.command(0x1E, 0); untexture.run(ge);
+
+        // Rejected depth must leave RGB alone and still perform the z-fail op.
+        geometry(0, 64, 100); background(0, 64, 3, true);
+        geometry(0, 64, 101);
+        DisplayList reject(memory);
+        reject.command(0x23, 1); reject.command(0xDE, 4); reject.command(0xE7, 0);
+        reject.command(0x24, 1); reject.command(0xDC, 0xFF0901); reject.command(0xDD, 2 << 8);
+        reject.run(ge); overlay(1);
+        expect_pixel(memory, &gl, 0);
+        assert(memory.load32(sample) >> 24 == 9);
+
+        geometry(0, 64); background();
+        DisplayList alpha_reject(memory);
+        alpha_reject.command(0x22, 1); alpha_reject.command(0xDB, 0xFF0000); // Never.
+        alpha_reject.command(0x24, 1); alpha_reject.command(0xDC, 0xFF0001); alpha_reject.command(0xDD, 4 << 16);
+        alpha_reject.run(ge); overlay(1);
+        expect_pixel(memory, &gl, 0);
+        assert(memory.load32(sample) >> 24 == 64); // Discard precedes stencil.
+        DisplayList alpha_reset(memory); alpha_reset.command(0x22, 0); alpha_reset.run(ge);
+
+        for (unsigned format = 0; format < 4; ++format) for (unsigned rgb : {0x808080u, 0xFFFFFFu}) {
+            geometry(0, 64); background(rgb, 0, format);
+            const auto downloads = gl.downloads();
+            DisplayList dither(memory);
+            dither.command(0xD3, 0); dither.command(0x21, 1); dither.command(0xDF, 10 | (10 << 4));
+            dither.command(0xE0, 0xFFFFFF); dither.command(0xE1, 0xFFFFFF);
+            dither.command(0x55, 0x080808); dither.command(0x58, 255);
+            dither.command(0x20, 1);
+            for (unsigned row = 0; row < 4; ++row) dither.command(0xE2 + row, 0x8888); // -8
+            dither.draw(6, 2); dither.run(ge); gl.flush();
+            assert(gl.downloads() == downloads);
+            if (format == 3) expect_pixel(memory, &gl, rgb);
+            else {
+                const auto address = 0x04000000 + (32 * 64 + 32) * 2;
+                gl.prepare_vram_read(address, 2);
+                const unsigned gray[] = {0x8410, 0x4210, 0x0888}, white[] = {0xFFFF, 0x7FFF, 0x0FFF};
+                assert(memory.load16(address) == (rgb == 0x808080 ? gray[format] : white[format]));
+            }
+        }
+    }
+}
+
 void texture_function_precision(bool use_gl) {
     std::cout << "Texture-function integer precision: " << (use_gl ? "GLES3" : "software") << std::endl;
     psprecomp::GuestMemory memory;
@@ -1250,6 +1438,7 @@ int main() {
     render_target_precision(false);
     ordered_dither(false);
     rgb565_destination_alpha(false);
+    exact_blend_rounding(false);
     texture_function_precision(false);
     GlContext context;
     lighting_colors(true);
@@ -1261,10 +1450,12 @@ int main() {
     render_target_precision(true);
     ordered_dither(true);
     rgb565_destination_alpha(true);
+    exact_blend_rounding(true);
     texture_function_precision(true);
     texture_filters();
     texture_mipmaps();
     mipmap_clut_and_vram();
     presentation_sampler_state();
+    ordered_blend_gpu();
     std::cout << "GE shared software/GLES3 tests and GLES3 filter/mipmap tests passed\n";
 }

@@ -36,6 +36,8 @@ Do not claim full PSP/render/audio/controller/mode accuracy from a short smoke t
 
 Native graphics captures must explicitly request and verify at least eight bits per RGBA channel; EGL defaults can select RGBA4444. Prefer direct guest-format framebuffer readback and verify that presentation matches it before computing image metrics. Earlier local GLES replay images using the default pbuffer are excluded from color-fidelity conclusions; see the 2026-10-14 correction in `docs/PPSSPP_REFERENCE.md`. Their independent synthetic pixel regressions remain valid.
 
+Blend optimizations must preserve overlapping primitive order, destination stencil-alpha updates and self-texture feedback. Test GPU-only snapshots without CPU downloads, shared-edge/disjoint batching and source-only equations. Keep native replay timings separate from actual browser/gameplay FPS, and report local image regions that worsen even when full-frame error improves.
+
 ## State and documentation
 
 - Preserve local game files, prior diagnostic captures and save exports. Export/hash saves before replacing fixtures; keep baseline and progressed checkpoints identifiable.

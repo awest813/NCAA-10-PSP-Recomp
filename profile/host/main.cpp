@@ -1029,6 +1029,7 @@ int main(int argc, char **argv) {
                     std::cout << "[frame " << frame << "] gl passes/frame: alpha=" << p.alpha_resolves / 60.0
                               << " stencil=" << p.stencil_resolves / 60.0 << " reinterpret=" << p.reinterprets / 60.0
                               << " feedback=" << p.feedback_copies / 60.0 << " blits=" << p.blits / 60.0
+                              << " blend_copies=" << p.blend_copies / 60.0 << " blend_mpx=" << p.blend_pixels / 60.0 / 1e6
                               << " extra_mpx=" << p.pixels / 60.0 / 1e6 << "\n";
                     g_session.gl->reset_passes();
                     if (frame >= 900 && std::getenv("PSPWEB_GE_PROFILE") != nullptr) g_session.gl->report_targets();

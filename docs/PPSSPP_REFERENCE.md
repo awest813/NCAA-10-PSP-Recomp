@@ -1,6 +1,23 @@
 # PPSSPP reference evidence
 
-## Current first-divergence and texture-function evidence (2026-10-14)
+## Current ordered shader-blend evidence (2026-10-14)
+
+The independent draw-39 fixture reproduced GLES `(114,147,67)` instead of reference `(114,146,67)`. The renderer now truncates each half-step fixed-point contribution separately, combines them, then dithers before saturation and target RGB packing. This follows the studied [pixel pipeline](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/DrawPixel.cpp), independently implemented. Software and GLES cover six blend equations, factor classes, fixed-color aliases and doubled-alpha boundaries. Reserved equations match the software reference's fallback, without claiming hardware equivalence.
+
+WebGL2 destination reads use a separate GPU texture. A convex separation test groups consecutive triangles whose interiors do not overlap; shared edges can share one copy, overlap starts another ordered group, and searches are capped at 256 triangles. Each copy is limited to the group's scissored region. Stencil alpha is resolved before subsequent destination-alpha reads. Source-only equations need no destination copy and retain batching, while self-texturing still gets ordered source snapshots. Tests verify repeated overlaps, disjoint/shared-edge batching, origins, stencil/depth/alpha-test ordering, self-feedback, four framebuffer formats and scaled output. They assert no render-path CPU download. Blend copy counts/area are exposed in native profiling.
+
+| Corrected direct software comparison | Before RGB MAE | After RGB MAE | Fixed ROI before → after |
+| --- | --- | --- | --- |
+| SDSU | 0.585381 | **0.432580** | Field: 0.319599 → **0.060150** |
+| Georgia Tech–Georgia | 1.044534 | **1.023075** | Pause-menu text: 0.062055 → **0.487218** |
+
+The second ROI uses the same coordinates as the SDSU field ROI, but contains pause-menu text. Its worsening is preserved as the next sampling/coverage precision target. Prefix 39 remains exact; prefix 40 improves 0.355211 → 0.010098 and its field ROI becomes exact. Prefix 45/100 errors are 0.033816 / 0.033923; prefix 323 remains 2.069738. Reports and reference / prior / current panels are `ordered-blend-comparison.json/png`; `ordered-blend-summary.json` aggregates results. Direct RGB565 and presented RGBA8 match in all seven cases. Original dumps and captures are preserved; prefixes are modified diagnostics.
+
+Matched native O3 ABBA runs have 16 repeated frames each, discarding the first two. Combined medians are SDSU 168.332 → 172.2645 ms (+2.34%) and GT 137.0855 → 140.667 ms (+2.61%). SDSU maximum worsens 204.168 → 301.349 ms; GT maximum is 156.285 → 152.020 ms. This is parser/CPU-GE submission/presentation/`glFinish` wall time on ANGLE/Intel Arc A750, not browser gameplay FPS. Final reads are outside timing. Repeated outputs match single-frame hashes. Counts: SDSU 1,982 draws, 919 copies / 618,114 copied pixels; GT 1,930 draws, 840 copies / 833,528 pixels. Source-only-copy elimination and scissor rejection avoid unnecessary work, but sustained pacing and device coverage remain unverified. `ordered-blend-performance.json` retains all samples and limitations. Earlier O2-vs-O3 exploratory runs are not the accepted timing comparison.
+
+Latest package `build/static-ncaa10-exact-blend` has 14 companions, verified boot data and no ISO. Native/web rebuilds, ten native suites, eight package cases and exact NCAA verification pass. Fresh browser testing still awaits Chrome app access; no user game/save state or original reference session was modified. Remaining render precision includes menu text, geometry/coverage, alpha/stencil/masks and broader hardware/frame coverage. AOT execution and the 64 MiB / 56 MiB default are unchanged.
+
+## Prior first-divergence and texture-function evidence (2026-10-14)
 
 Original draw ordinal 39 is the first differing post-field draw: corrected diagnostic prefixes 38 and 39 match, while prefix 40 differs. It uses modulated/doubled indexed texture color, source-alpha blending and stencil. A cloned diagnostic payload inserts blend-disable immediately before that draw. Its pre-conversion source RGB differs only by one green-channel unit across row 218. Production rendering is untouched by that diagnostic modification.
 

@@ -70,8 +70,14 @@ uniform bool u_alpha_test;
 uniform int u_alpha_func;
 uniform int u_alpha_ref;
 uniform int u_alpha_mask;
-uniform vec3 u_src_scale;
-uniform bool u_blend_alpha_to_rgb;
+uniform bool u_shader_blend;
+uniform highp sampler2D u_destination;
+uniform bool u_read_destination;
+uniform int u_blend_src;
+uniform int u_blend_dst;
+uniform int u_blend_equation;
+uniform vec3 u_fix_a;
+uniform vec3 u_fix_b;
 uniform int u_output_format;
 uniform bool u_clear;
 uniform vec2 u_tex_window; // PSP texture size when sampling part of a larger surface (else 0)
@@ -171,6 +177,41 @@ vec4 sample_mips(vec2 uv) {
     }
     return color / 255.0;
 }
+ivec3 blend_factor(int mode, ivec4 src, ivec4 dst, ivec3 fixed_color, bool source) {
+    if (mode == 0) return source ? dst.rgb : src.rgb;
+    if (mode == 1) return ivec3(255) - (source ? dst.rgb : src.rgb);
+    if (mode == 2) return ivec3(src.a);
+    if (mode == 3) return ivec3(255 - src.a);
+    if (mode == 4) return ivec3(dst.a);
+    if (mode == 5) return ivec3(255 - dst.a);
+    if (mode == 6) return ivec3(2 * src.a);
+    if (mode == 7) return ivec3(max(255 - 2 * src.a, 0));
+    if (mode == 8) return ivec3(2 * dst.a);
+    if (mode == 9) return ivec3(max(255 - 2 * dst.a, 0));
+    return fixed_color;
+}
+vec3 blend_rgb(vec4 color) {
+    ivec4 src = ivec4(floor(clamp(color, 0.0, 1.0) * 255.0 + 0.0001));
+    if (u_blend_equation >= 6) return vec3(src.rgb) / 255.0;
+    ivec4 dst = u_read_destination ? ivec4(texelFetch(u_destination, ivec2(gl_FragCoord.xy), 0) * 255.0 + 0.5) : ivec4(0);
+    if (u_output_format == 0) dst.a = 0;
+    else if (u_output_format == 1) dst.a = (dst.a & 128) != 0 ? 255 : 0;
+    else if (u_output_format == 2) dst.a = (dst.a >> 4) * 17;
+    ivec3 result;
+    if (u_blend_equation == 3) result = min(src.rgb, dst.rgb);
+    else if (u_blend_equation == 4) result = max(src.rgb, dst.rgb);
+    else if (u_blend_equation == 5) result = abs(src.rgb - dst.rgb);
+    else {
+        ivec3 sf = blend_factor(u_blend_src, src, dst, ivec3(u_fix_a), true);
+        ivec3 df = blend_factor(u_blend_dst, src, dst, ivec3(u_fix_b), false);
+        // Each half-step fixed-point product truncates independently. Keep
+        // subtraction unsaturated until after dithering and target packing.
+        ivec3 s = ((src.rgb * 2 + 1) * (sf * 2 + 1)) >> 10;
+        ivec3 d = ((dst.rgb * 2 + 1) * (df * 2 + 1)) >> 10;
+        result = u_blend_equation == 1 ? s - d : u_blend_equation == 2 ? d - s : s + d;
+    }
+    return vec3(result) / 255.0;
+}
 void main() {
     // The GE stores integer 16-bit depth. Preserve that precision before
     // comparisons even though the host attachment has 24 depth bits.
@@ -233,8 +274,7 @@ void main() {
         vec3 rgb = floor(c.rgb * 255.0);
         c.rgb = floor((rgb * fog + u_fog_color * (255.0 - fog) + 255.0) / 256.0) / 255.0;
     }
-    c.rgb *= u_src_scale;
-    if (u_blend_alpha_to_rgb) c.rgb = vec3(c.a);
+    if (u_shader_blend) c.rgb = blend_rgb(c);
     o_color = quantize_output(c);
 }
 )";
@@ -390,26 +430,6 @@ GLenum depth_func(std::uint32_t f) {
     return table[f & 7u];
 }
 
-GLenum blend_factor(std::uint32_t f, bool source, std::uint32_t fixed, bool &uses_constant, bool zero_dst_alpha) {
-    // The RGBA host surface retains opaque texture alpha for 565 sampling.
-    // Its alpha is not the PSP destination blend alpha, which is always zero.
-    if (zero_dst_alpha && is_dst_alpha_factor(f)) return (f & 1u) != 0u ? GL_ONE : GL_ZERO;
-    switch (f) {
-    case 0: return source ? GL_DST_COLOR : GL_SRC_COLOR;
-    case 1: return source ? GL_ONE_MINUS_DST_COLOR : GL_ONE_MINUS_SRC_COLOR;
-    case 2: case 6: return GL_SRC_ALPHA;
-    case 3: case 7: return GL_ONE_MINUS_SRC_ALPHA;
-    case 4: case 8: return GL_DST_ALPHA;
-    case 5: case 9: return GL_ONE_MINUS_DST_ALPHA;
-    default:
-        if ((fixed & 0xFFFFFFu) == 0u) return GL_ZERO;
-        if ((fixed & 0xFFFFFFu) == 0xFFFFFFu) return GL_ONE;
-        if (source) return GL_ONE; // the shader pre-multiplies by FIXA
-        uses_constant = true;
-        return GL_CONSTANT_COLOR;
-    }
-}
-
 std::uint32_t to_rgba(std::uint32_t v, std::uint32_t format) {
     auto e5 = [](std::uint32_t x) { return (x << 3u) | (x >> 2u); };
     auto e6 = [](std::uint32_t x) { return (x << 2u) | (x >> 4u); };
@@ -549,7 +569,7 @@ void GeGl::set_enabled(GLenum cap, int &cached, bool on) {
 
 void GeGl::set_uniform(GLint location, float a, float b, float c, int count) {
     if (location < 0) return;
-    if (location < 32) {
+    if (location < 64) {
         float *v = cache_.uniforms[location];
         if (cache_.uniform_valid[location] && v[0] == a && v[1] == b && v[2] == c) return;
         v[0] = a; v[1] = b; v[2] = c;
@@ -562,7 +582,7 @@ void GeGl::set_uniform(GLint location, float a, float b, float c, int count) {
 
 void GeGl::set_uniform_int(GLint location, int value) {
     if (location < 0) return;
-    if (location < 32) {
+    if (location < 64) {
         float *v = cache_.uniforms[location];
         const auto as_float = static_cast<float>(value);
         if (cache_.uniform_valid[location] && v[0] == as_float) return;
@@ -589,8 +609,14 @@ bool GeGl::init() {
     u_alpha_func_ = glGetUniformLocation(program_, "u_alpha_func");
     u_alpha_ref_ = glGetUniformLocation(program_, "u_alpha_ref");
     u_alpha_mask_ = glGetUniformLocation(program_, "u_alpha_mask");
-    u_src_scale_ = glGetUniformLocation(program_, "u_src_scale");
-    u_blend_alpha_to_rgb_ = glGetUniformLocation(program_, "u_blend_alpha_to_rgb");
+    u_shader_blend_ = glGetUniformLocation(program_, "u_shader_blend");
+    u_destination_ = glGetUniformLocation(program_, "u_destination");
+    u_read_destination_ = glGetUniformLocation(program_, "u_read_destination");
+    u_blend_src_ = glGetUniformLocation(program_, "u_blend_src");
+    u_blend_dst_ = glGetUniformLocation(program_, "u_blend_dst");
+    u_blend_equation_ = glGetUniformLocation(program_, "u_blend_equation");
+    u_fix_a_ = glGetUniformLocation(program_, "u_fix_a");
+    u_fix_b_ = glGetUniformLocation(program_, "u_fix_b");
     u_output_format_ = glGetUniformLocation(program_, "u_output_format");
     u_clear_ = glGetUniformLocation(program_, "u_clear");
     u_tex_window_ = glGetUniformLocation(program_, "u_tex_window");
@@ -621,6 +647,7 @@ bool GeGl::init() {
     u_al_value_ = glGetUniformLocation(alpha_program_, "u_value");
     glUseProgram(program_);
     glUniform1i(u_tex_, 0);
+    glUniform1i(u_destination_, 1);
     glUseProgram(0);
 
     glGenVertexArrays(1, &vao_);
@@ -643,6 +670,15 @@ bool GeGl::init() {
     glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, sizeof(GlVertex), reinterpret_cast<void *>(offsetof(GlVertex, fog)));
     glGenVertexArrays(1, &present_vao_);
     glGenTextures(1, &scratch_texture_);
+    glGenTextures(1, &destination_texture_);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, destination_texture_);
+    glBindSampler(1, 0);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    destination_width_ = destination_height_ = 1;
+    glActiveTexture(GL_TEXTURE0);
     // Bound whenever a draw samples nothing, so no framebuffer texture stays
     // bound to the sampler (WebGL rejects that as a feedback loop).
     // Mip texelFetch requires a mip-capable sampler even though the shader
@@ -1394,13 +1430,9 @@ void GeGl::apply_state() {
     set_uniform(u_target_, static_cast<float>(surface.stride), static_cast<float>(surface.height), 0.0f, 2);
     set_uniform(u_origin_, static_cast<float>(ox), static_cast<float>(oy), 0.0f, 2);
     set_uniform_int(u_clear_, s.clear ? 1 : 0);
-    set_uniform_int(u_blend_alpha_to_rgb_, 0);
-    // Unblended writes and clears can pack directly. Blended writes need
-    // quantization after the host blend equation, not on the source color.
-    set_uniform_int(u_output_format_, s.clear || !s.blend ? static_cast<int>(s.fb_format) : 3);
-    // A blended draw needs dithering after the host blend equation. Do not
-    // perturb its source color with the unblended fragment-output path.
-    set_uniform_int(u_dither_, s.dither && (s.clear || !s.blend) ? 1 : 0);
+    set_uniform_int(u_shader_blend_, s.blend && !s.clear ? 1 : 0);
+    set_uniform_int(u_output_format_, static_cast<int>(s.fb_format));
+    set_uniform_int(u_dither_, s.dither ? 1 : 0);
     if (s.dither && (!cache_.dither_rows_valid || cache_.dither_rows != s.dither_rows)) {
         glUniform4i(u_dither_rows_, static_cast<GLint>(s.dither_rows[0]), static_cast<GLint>(s.dither_rows[1]),
                     static_cast<GLint>(s.dither_rows[2]), static_cast<GLint>(s.dither_rows[3]));
@@ -1494,7 +1526,6 @@ void GeGl::apply_state() {
         set_uniform_int(u_tex_enable_, 0);
         set_uniform_int(u_alpha_test_, 0);
         set_uniform_int(u_fog_enable_, 0);
-        set_uniform(u_src_scale_, 1.0f, 1.0f, 1.0f, 3);
         bind_texture0(blank_texture_);
         return;
     }
@@ -1504,52 +1535,19 @@ void GeGl::apply_state() {
                (s.mask_rgb & 0xFF0000u) != 0xFF0000u, false);
     depth(s.z_test, depth_func(s.z_func), s.z_write);
 
-    float src_scale[3] = {1.0f, 1.0f, 1.0f};
-    set_enabled(GL_BLEND, cache_.blend, s.blend);
+    // The shader combines individually rounded source/destination products,
+    // then dithers and packs. Fixed-function blending would round too late.
+    set_enabled(GL_BLEND, cache_.blend, false);
     if (s.blend) {
-        bool uses_constant = false;
-        GLenum src = blend_factor(s.src_factor, true, s.fix_a, uses_constant, s.fb_format == 0u);
-        GLenum dst = blend_factor(s.dst_factor, false, s.fix_b, uses_constant, s.fb_format == 0u);
-        const bool alpha_modulation = s.src_factor == 10u && (s.fix_a & 0xFFFFFFu) == 0u &&
-            (s.dst_factor == 6u || s.dst_factor == 7u) && (s.equation == 0u || s.equation == 2u);
-        if (alpha_modulation) {
-            // With no source contribution, represent 2*a*D as a*D + a*D.
-            // For (1-2*a)*D use (1-a)*D - a*D. Each operand fits the
-            // host's normalized source range, including a > 0.5.
-            src = GL_DST_COLOR;
-            dst = s.dst_factor == 6u ? GL_SRC_ALPHA : GL_ONE_MINUS_SRC_ALPHA;
-            set_uniform_int(u_blend_alpha_to_rgb_, 1);
-        }
-        if (s.src_factor >= 10u && src == GL_ONE && (s.fix_a & 0xFFFFFFu) != 0xFFFFFFu) {
-            src_scale[0] = static_cast<float>(s.fix_a & 0xFFu) / 255.0f;
-            src_scale[1] = static_cast<float>((s.fix_a >> 8u) & 0xFFu) / 255.0f;
-            src_scale[2] = static_cast<float>((s.fix_a >> 16u) & 0xFFu) / 255.0f;
-        }
-        if (uses_constant) {
-            const float color[4] = {static_cast<float>(s.fix_b & 0xFFu) / 255.0f,
-                                    static_cast<float>((s.fix_b >> 8u) & 0xFFu) / 255.0f,
-                                    static_cast<float>((s.fix_b >> 16u) & 0xFFu) / 255.0f, 1.0f};
-            if (!std::equal(color, color + 4, cache_.blend_color)) {
-                glBlendColor(color[0], color[1], color[2], color[3]);
-                std::copy(color, color + 4, cache_.blend_color);
-            }
-        }
-        if (cache_.blend_src != src || cache_.blend_dst != dst) {
-            glBlendFunc(src, dst);
-            cache_.blend_src = src;
-            cache_.blend_dst = dst;
-        }
-        static constexpr GLenum equations[6] = {GL_FUNC_ADD, GL_FUNC_SUBTRACT, GL_FUNC_REVERSE_SUBTRACT,
-                                                GL_MIN, GL_MAX, GL_FUNC_ADD};
-        const GLenum equation = alpha_modulation
-            ? (s.dst_factor == 6u ? GL_FUNC_ADD : GL_FUNC_REVERSE_SUBTRACT)
-            : equations[std::min(s.equation, 5u)];
-        if (cache_.blend_eq != equation) {
-            glBlendEquation(equation);
-            cache_.blend_eq = equation;
-        }
+        set_uniform_int(u_read_destination_, blend_reads_destination() ? 1 : 0);
+        set_uniform_int(u_blend_src_, static_cast<int>(s.src_factor));
+        set_uniform_int(u_blend_dst_, static_cast<int>(s.dst_factor));
+        set_uniform_int(u_blend_equation_, static_cast<int>(s.equation));
+        set_uniform(u_fix_a_, static_cast<float>(s.fix_a & 255u), static_cast<float>((s.fix_a >> 8u) & 255u),
+                    static_cast<float>((s.fix_a >> 16u) & 255u), 3);
+        set_uniform(u_fix_b_, static_cast<float>(s.fix_b & 255u), static_cast<float>((s.fix_b >> 8u) & 255u),
+                    static_cast<float>((s.fix_b >> 16u) & 255u), 3);
     }
-    set_uniform(u_src_scale_, src_scale[0], src_scale[1], src_scale[2], 3);
     set_uniform_int(u_fog_enable_, s.fog ? 1 : 0);
     if (s.fog) {
         set_uniform(u_fog_color_, static_cast<float>(s.fog_color & 0xFFu),
@@ -1604,6 +1602,95 @@ GeGl::Rect GeGl::batch_bounds(bool &rectangle) const {
     return Rect{x0, y0, x1, y1};
 }
 
+bool GeGl::blend_reads_destination() const {
+    const auto &s = state_;
+    if (s.equation >= 6u) return false;
+    if (s.equation >= 3u) return true;
+    const bool source_reads = s.src_factor <= 1u || (s.fb_format != 0u && is_dst_alpha_factor(s.src_factor));
+    const bool zero_dest = (s.dst_factor >= 10u && (s.fix_b & 0xFFFFFFu) == 0u) ||
+                           (s.fb_format == 0u && (s.dst_factor == 4u || s.dst_factor == 8u));
+    return source_reads || !zero_dest;
+}
+
+void GeGl::build_blend_groups() {
+    blend_group_ends_.clear();
+    blend_group_bounds_.clear();
+    const std::size_t count = indices_.size() / 3u;
+    triangle_bounds_.resize(count);
+    const Rect scissor{state_.sx1, state_.sy1, state_.sx2, state_.sy2};
+    auto triangle = [&](std::size_t i, unsigned vertex) -> const GlVertex & {
+        return batch_[indices_[i * 3u + vertex]];
+    };
+    // Convex separating-axis test: shared edges do not overlap interiors.
+    // This lets the two triangles of a rectangle use one destination copy.
+    auto interiors_overlap = [&](std::size_t a, std::size_t b) {
+        for (std::size_t source : {a, b}) for (unsigned edge = 0; edge < 3; ++edge) {
+            const auto &p = triangle(source, edge), &q = triangle(source, (edge + 1u) % 3u);
+            const double nx = static_cast<double>(q.y) - p.y, ny = static_cast<double>(p.x) - q.x;
+            if (nx == 0.0 && ny == 0.0) continue;
+            double alo = 1e30, ahi = -1e30, blo = 1e30, bhi = -1e30;
+            for (unsigned v = 0; v < 3; ++v) {
+                const auto &av = triangle(a, v), &bv = triangle(b, v);
+                const double ap = nx * av.x + ny * av.y, bp = nx * bv.x + ny * bv.y;
+                alo = std::min(alo, ap); ahi = std::max(ahi, ap);
+                blo = std::min(blo, bp); bhi = std::max(bhi, bp);
+            }
+            if (ahi <= blo || bhi <= alo) return false;
+        }
+        return true;
+    };
+    std::size_t begin = 0;
+    Rect bounds;
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto &a = triangle(i, 0), &b = triangle(i, 1), &c = triangle(i, 2);
+        Rect r{static_cast<int>(std::floor(std::max(std::min({a.x, b.x, c.x}), -4096.0f))),
+               static_cast<int>(std::floor(std::max(std::min({a.y, b.y, c.y}), -4096.0f))),
+               static_cast<int>(std::ceil(std::min(std::max({a.x, b.x, c.x}), 4096.0f))) - 1,
+               static_cast<int>(std::ceil(std::min(std::max({a.y, b.y, c.y}), 4096.0f))) - 1};
+        triangle_bounds_[i] = r = r.clip(scissor);
+        // Bound the CPU search cost even for large disjoint batches.
+        bool conflict = i - begin >= 256u;
+        if (!conflict && bounds.intersects(r)) {
+            for (std::size_t prior = begin; prior < i; ++prior) {
+                if (triangle_bounds_[prior].intersects(r) && interiors_overlap(prior, i)) {
+                    conflict = true;
+                    break;
+                }
+            }
+        }
+        if (conflict) {
+            blend_group_ends_.push_back(i * 3u);
+            blend_group_bounds_.push_back(bounds);
+            begin = i;
+            bounds = Rect{};
+        }
+        bounds.add(r);
+    }
+    blend_group_ends_.push_back(indices_.size());
+    blend_group_bounds_.push_back(bounds);
+}
+
+void GeGl::snapshot_destination(const Rect &region) {
+    if (current_ == nullptr || region.empty()) return;
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, destination_texture_);
+    glBindSampler(1, 0);
+    const auto width = static_cast<GLsizei>(current_->stride) * scale_;
+    const auto height = static_cast<GLsizei>(current_->height) * scale_;
+    if (destination_width_ != width || destination_height_ != height) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        destination_width_ = width;
+        destination_height_ = height;
+    }
+    glCopyTexSubImage2D(GL_TEXTURE_2D, 0, region.x0 * scale_, region.y0 * scale_, region.x0 * scale_,
+                        region.y0 * scale_, (region.x1 - region.x0 + 1) * scale_, (region.y1 - region.y0 + 1) * scale_);
+    ++passes_.blend_copies;
+    const auto pixels = static_cast<std::uint64_t>((region.x1 - region.x0 + 1) * (region.y1 - region.y0 + 1)) * scale_ * scale_;
+    passes_.blend_pixels += pixels;
+    passes_.pixels += pixels;
+    glActiveTexture(GL_TEXTURE0);
+}
+
 void GeGl::flush() {
     if (batch_.empty() || indices_.empty() || !state_valid_) {
         batch_.clear();
@@ -1620,10 +1707,8 @@ void GeGl::flush() {
     } flush_timer{flush_ms_, started, timed};
     clear_alpha_ = batch_.front().a;
     apply_state();
-    if (current_ != nullptr) {
-        bool rectangle = false;
-        const Rect drawn = batch_bounds(rectangle).shifted(current_ox_, current_oy_).clip(
-            Rect{0, 0, static_cast<int>(current_->stride) - 1, static_cast<int>(current_->height) - 1});
+    auto mark_group = [&](const Rect &drawn) {
+        if (current_ == nullptr || drawn.empty()) return;
         mark_drawn(*current_, drawn);
         if (batch_writes_stencil_) {
             Rect &stale = current_->alpha_stale;
@@ -1638,7 +1723,7 @@ void GeGl::flush() {
             }
         }
         current_->last_draw = ++draw_sequence_;
-    }
+    };
     // Each draw re-specifies the vertex buffer (orphaning) and gets an index
     // buffer of its own from a rotating pool.  Writing into a buffer the GPU may
     // still be reading makes mobile drivers stall or copy it, and some browsers
@@ -1649,9 +1734,34 @@ void GeGl::flush() {
     next_index_buffer_ = (next_index_buffer_ + 1u) % index_buffers_.size();
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indices_.size() * sizeof(std::uint32_t)), indices_.data(),
                  GL_STREAM_DRAW);
-    glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(indices_.size()), GL_UNSIGNED_INT, nullptr);
+    const bool shader_blend = state_.blend && !state_.clear;
+    const bool reads_destination = shader_blend && blend_reads_destination();
+    // A source-only blend still needs ordered source snapshots when it samples
+    // a GPU target that may be the surface being written.
+    if (shader_blend && (reads_destination || (state_.texture && state_.tex_from_target))) build_blend_groups();
+    else {
+        bool rectangle = false;
+        blend_group_ends_.assign(1u, indices_.size());
+        blend_group_bounds_.assign(1u, batch_bounds(rectangle));
+    }
+    std::size_t begin = 0;
+    for (std::size_t group = 0; group < blend_group_ends_.size(); ++group) {
+        const std::size_t end = blend_group_ends_[group];
+        // A previous group may have changed stencil alpha. Applying state again
+        // resolves it before destination-alpha sampling and restores any GL
+        // state changed by that resolve; depth/stencil stay on the same target.
+        if (group != 0u) apply_state();
+        const Rect drawn = blend_group_bounds_[group].shifted(current_ox_, current_oy_).clip(whole(*current_));
+        if (!drawn.empty()) {
+            if (reads_destination) snapshot_destination(drawn);
+            glDrawElements(GL_TRIANGLES, static_cast<GLsizei>(end - begin), GL_UNSIGNED_INT,
+                           reinterpret_cast<void *>(begin * sizeof(std::uint32_t)));
+            ++draw_calls_;
+            mark_group(drawn);
+        }
+        begin = end;
+    }
     indices_.clear();
-    ++draw_calls_;
     batch_.clear();
 }
 
