@@ -1365,6 +1365,63 @@ void mipmap_clut_and_vram() {
     draw(7, false, 0xFFFFFF);
 }
 
+// Decoded textures use fixed-point coordinates and four-bit filter weights.
+// The first case has weights 144/48/48/16: blue is 74.5, which truncates to 74.
+void decoded_filter_precision() {
+    std::cout << "Decoded texture filter precision: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl);
+    constexpr unsigned texture = vertices + 0x1000;
+    const std::array<unsigned, 4> texels = {0x0D110503, 0xF1CD9565, 0x257F3B1F, 0xAD2BD3EF};
+    for (unsigned i = 0; i < texels.size(); ++i) memory.store32(texture + i * 4, texels[i]);
+    memory.store32(texture + 32, 0xFFFFFFFF);
+    struct Case { float u, v; bool linear, clamp; unsigned rgb, alpha; };
+    const std::array<Case, 7> cases = {{
+        {.75f, .75f, true, false, 0x4A3729, 70},
+        {.8f, .9f, true, false, 0x4F3E30, 70},
+        {-65.0f / 1024, .75f, true, false, 0x706450, 134},
+        {-1.0f / 1024, .5f, false, false, 0x110503, 13},
+        {-65.0f / 1024, .75f, true, true, 0x2C120A, 19},
+        {1025.0f / 1024, .5f, false, false, 0xCD9565, 241},
+        {.75f, 205.0f / 256, true, false, 0x4A3729, 70},
+    }};
+    for (int scale : {1, 2}) {
+        assert(gl.set_render_scale(scale) == scale);
+        for (bool mips : {false, true}) for (const auto &test : cases) {
+            // GE clear keeps the GPU background coherent. A wrong sampled
+            // alpha fails the equality test below and leaves this magenta.
+            const std::array<float, 6> clear_data = {0, 0, 0, 64, 64, 0};
+            for (unsigned i = 0; i < clear_data.size(); ++i)
+                memory.store32(vertices + i * 4, std::bit_cast<unsigned>(clear_data[i]));
+            DisplayList clear(memory);
+            clear.command(0x9C, 0); clear.command(0x9D, 64); clear.command(0xD2, 3);
+            clear.command(0xD4, 0); clear.command(0xD5, 63 | (63 << 10));
+            clear.command(0x12, (3u << 7) | (1u << 23)); clear.command(0x1E, 0);
+            clear.command(0x21, 0); clear.command(0x22, 0); clear.command(0xD3, 0x301);
+            clear.command(0x55, 0xFF00FF); clear.command(0x58, 255);
+            clear.draw(6, 2); clear.run(ge);
+            const std::array<float, 10> data = {test.u, test.v, 0, 0, 0, test.u, test.v, 64, 64, 0};
+            for (unsigned i = 0; i < data.size(); ++i)
+                memory.store32(vertices + i * 4, std::bit_cast<unsigned>(data[i]));
+            DisplayList draw(memory);
+            draw.command(0x12, 3u | (3u << 7) | (1u << 23)); draw.command(0x1E, 1);
+            draw.command(0xD3, 0); draw.command(0xA0, texture & 0xFFFFFF); draw.command(0xA8, 0x080002);
+            draw.command(0xB8, 0x101); draw.command(0xC2, mips ? 0x10000 : 0); draw.command(0xC3, 3);
+            draw.command(0xA1, (texture + 32) & 0xFFFFFF); draw.command(0xA9, 0x080001); draw.command(0xB9, 0);
+            draw.command(0xC8, 1); // Constant level zero, with/without an uploaded mip.
+            draw.command(0xC9, 0x103); draw.command(0xC7, test.clamp ? 0x101 : 0);
+            draw.command(0xC6, test.linear ? 0x101 : 0);
+            draw.command(0x22, 1); draw.command(0xDB, 2 | (test.alpha << 8) | 0xFF0000);
+            const auto downloads = gl.downloads();
+            draw.draw(6, 2); draw.run(ge); gl.flush();
+            assert(gl.downloads() == downloads);
+            expect_pixel(memory, &gl, test.rgb);
+        }
+    }
+}
+
 // Minification and magnification are independent GE filter settings. Use a
 // striped texture with known fractional sample positions in both regimes.
 void texture_filters() {
@@ -1392,8 +1449,8 @@ void texture_filters() {
             draw.command(0xC7, wrap);
             draw.command(0xC6, filter); draw.draw(6, 2); draw.run(ge);
             const bool linear = (filter & (minify ? 1u : 0x100u)) != 0;
-            const unsigned channel = minify ? (linear && !(wrap & 1) ? 128 : 255) : (linear ? 64 : 0);
-            expect_pixel(memory, &gl, channel * 0x010101u, 1);
+            const unsigned channel = minify ? (linear && !(wrap & 1) ? 127 : 255) : (linear ? 63 : 0);
+            expect_pixel(memory, &gl, channel * 0x010101u);
         }
     }
 }
@@ -1552,6 +1609,7 @@ int main() {
     interpolated_color_precision(true);
     interpolated_secondary_precision();
     texture_function_precision(true);
+    decoded_filter_precision();
     texture_filters();
     texture_mipmaps();
     mipmap_clut_and_vram();

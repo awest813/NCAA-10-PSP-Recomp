@@ -137,7 +137,9 @@ vec4 mip_texel(ivec2 p, int level, ivec2 size) {
 }
 vec4 mip_level(vec2 uv, int level, bool linear) {
     ivec2 size = max(ivec2(u_tex_size) >> level, ivec2(1));
-    vec2 at = uv * vec2(size);
+    // GE first truncates to eight fractional coordinate bits, including
+    // negative values, then uses four bits for bilinear weights.
+    vec2 at = trunc(uv * vec2(size) * 256.0) / 256.0;
     vec4 color = vec4(0.0);
     if (!linear) {
         color = mip_texel(ivec2(floor(at)), level, size);
@@ -240,7 +242,9 @@ void main() {
             // Wrap or clamp inside the texture's own rectangle, never into neighbouring pixels.
             uv = mix(mod(uv, u_tex_window), clamp(uv, vec2(0.5), u_tex_window - 0.5), u_tex_clamp);
         }
-        vec4 t = u_lod_limits.x > 0.0 ? sample_mips(uv) : texture(u_tex, (uv + u_tex_origin) / u_tex_size);
+        // Decoded level-zero textures need the same byte/weight arithmetic as
+        // mip chains. GPU surface windows retain their scaled sampling path.
+        vec4 t = (u_lod_limits.x > 0.0 || u_tex_window.x == 0.0) ? sample_mips(uv) : texture(u_tex, (uv + u_tex_origin) / u_tex_size);
         if (u_tex_opaque) t.a = 1.0;
         // GE texture functions operate on byte channels, before blending or
         // alpha tests. Preserve the division's truncation and double RGB first.

@@ -18,7 +18,17 @@ This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAs
 
 ## Latest rendering and reference evidence
 
-### Current interpolated-color checkpoint (2026-10-14)
+### Current decoded-texture filtering checkpoint (2026-10-14)
+
+Decoded textures now use the byte/four-bit filter path even without mip levels. Texel coordinates first truncate toward zero to eight fractional bits, including negative coordinates; bilinear weights then use four bits, and the combined byte result truncates. An actual GE list previously produced blue 75 instead of 74. Exact tests cover RGB/alpha, fractional boundaries, negative wrap/clamp, nearest/linear, level-zero with/without a mip, 1x/2x and no rendering CPU downloads. Existing min/mag fixtures now assert exact 127/63 instead of tolerating rounded 128/64. GPU surface-window filtering retains its scaled GL path and remains a precision gap; software diagnostic filtering is also incomplete.
+
+Full-frame software-reference RGB MAE improves SDSU **0.402295 → 0.401468** (field ROI **0.060150 → 0.056140**) and GT **0.883931 → 0.880504** (pause ROI stays **0**). Earlier GT prefixes improve slightly; measured SDSU prefixes remain unchanged. All eleven RGBA8 presentations match direct RGB565. Local evidence: `build/reference-filter-20261014/decoded-filter-summary.json`, per-scene `decoded-filter-comparison.json/png`. Final O3 ABBA native replay medians versus `70fe877`: SDSU **168.9175 → 168.8645 ms (−0.03%)**, GT **140.582 → 141.408 ms (+0.59%)**. Maximums: 263.654 → 293.827 / 153.080 → 149.143 ms. Counts and repeated output hashes are unchanged within each renderer. These are diagnostic timings, not browser FPS; see `decoded-filter-performance.json`.
+
+The first remaining SDSU prefix mismatch includes source alpha 18 versus inferred reference 21 at `(0,107)`. A separate subpixel/7-of-16 pixel-center trial reduces prefix-40 differing RGB pixels from 2,915 to 994 and improves early scenes, but worsens complete-frame MAE to 0.552336 / 1.074831. That trial is excluded from production. Quad-shared slope alone has no effect on that prefix. `sampling-boundary-analysis.json` preserves the evidence and rejected trials. Next work: matching transform/coverage and GPU target filtering, with full-frame and hardware comparisons before accepting pixel-center changes.
+
+Latest package: `build/static-ncaa10-decoded-filter` (14 companions, verified boot data, no ISO); web build log `build/ncaa-decoded-filter-web-build.log`. Native/web builds, ten native suites, seven source-workflow cases, eight package cases and exact NCAA identity pass. Final Wasm contains the coordinate and decoded level-zero filter changes. No browser/reference process was opened this checkpoint. Fresh browser gameplay/audio/FPS awaits Chrome access; the broader controls, saves, modes, device and original 32 MiB work remains open. AOT execution and default 64 MiB / 56 MiB user partition remain intact.
+
+### Prior interpolated-color checkpoint (2026-10-14)
 
 The GT pause-menu discrepancy begins in background draw **4093**, before text draw **4100**. The opaque gradient is 70 → 27 over 272 pixels: at `(24,145)`, 46.998 was truncated to 46 while the x64 software reference produces 47. Font draws use nearest filtering with no mip levels. Primary RGBA and secondary RGB now round to nearest-even bytes before texture functions, alpha tests and blending; those later fixed-point divisions still truncate. The pinned x64 rasterizer and optimized pixel path were checked independently. ARM64/generic reference interpolation paths differ, so this is a verified x64-reference match, not complete PSP hardware proof.
 

@@ -1,6 +1,23 @@
 # PPSSPP reference evidence
 
-## Current interpolated-color evidence (2026-10-14)
+## Current decoded-texture filtering evidence (2026-10-14)
+
+Decoded level-zero textures now share the existing mip sampler's byte-channel/four-bit weighted interpolation. The [pinned reference sampler](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/Sampler.cpp) truncates coordinates to eight fractional bits toward zero before choosing texels/four-bit weights, including negative coordinates. An independently implemented actual GE regression reproduces old blue 75 versus expected 74. Exact RGB/alpha, nearest/linear, negative wrap/clamp, fractional boundaries, level-zero with/without an uploaded mip and 1x/2x fixtures pass. Rendering adds no CPU download. Existing min/mag fixtures now require exact truncated 127/63 instead of allowing rounded 128/64. GPU surface windows still use scaled GL sampling; the software diagnostic backend's filtering is also incomplete.
+
+| Corrected direct software comparison | Before RGB MAE | After RGB MAE | Fixed ROI before → after |
+| --- | --- | --- | --- |
+| SDSU | 0.402295 | **0.401468** | Field: 0.060150 → **0.056140** |
+| Georgia Tech–Georgia | 0.883931 | **0.880504** | Pause-menu region: **0 → 0** |
+
+GT prefix 4092 improves 3.443479 → 3.434646; 4094/4100/4101 improve 2.696403 → 2.689456 with exact menu ROI preserved. SDSU prefixes 39/40/45/100/323 are unchanged. All eleven presented RGBA8 outputs equal direct RGB565. Reports/panels are `decoded-filter-comparison.json/png`; aggregate/hashes are in `build/reference-filter-20261014/decoded-filter-summary.json`. Original capture/reference data remains intact. Modified prefix images are diagnostics, not gameplay screenshots.
+
+Matched O3 ABBA native medians versus `70fe877` are SDSU 168.9175 → 168.8645 ms (−0.03%) and GT 140.582 → 141.408 ms (+0.59%). Maximums are 263.654 → 293.827 and 153.080 → 149.143 ms. Each run uses 16 frames, first two excluded; parser/CPU submission/presentation/GPU completion are timed, final reads excluded. Repeated raw output hashes match the single-frame results. Counts remain 1,982 / 919 / 618,114 draws/copies/pixels for SDSU and 1,930 / 840 / 833,528 for GT. See `decoded-filter-performance.json`; these are not browser/gameplay FPS. An initial benchmark lacked its optional copy-counter define; it was corrected before the final matched comparison.
+
+Separately, the first remaining SDSU prefix has 2,915 differing pre-conversion RGB pixels, concentrated on full rows. At `(0,107)`, reference source/destination RGB imply alpha 21; a local alpha probe gives 18. Studied [pixel centers](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/Rasterizer.cpp) use 7/16, with [screen subpixel quantization](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/TransformUnit.cpp). A trial combining those reduces differing pixels to 994 but worsens both complete frames (0.552336 / 1.074831), so it is excluded from production. Quantization alone worsens that prefix; quad-shared slope alone does not change it. The trial is evidence for further transform/coverage work, not an accepted accuracy improvement or hardware proof. `sampling-boundary-analysis.json` retains provenance and limitations.
+
+Latest package `build/static-ncaa10-decoded-filter` contains 14 companions, verified boot data and no ISO. Native/web builds, ten native suites, seven source-workflow cases, eight package cases and exact NCAA verification pass. Fresh browser gameplay/pacing/audio remains pending app access. GPU surface filtering, geometry/coverage, hardware alpha/stencil/masks and broader mode/controller/save/device coverage remain open. Default 64 MiB / 56 MiB and AOT execution are unchanged.
+
+## Prior interpolated-color evidence (2026-10-14)
 
 The first affected menu-text draw is ordinal 4100, but a prefix before it already contains the one-unit error. Background draw 4093 interpolates an opaque gray gradient from 70 to 27 over 272 pixels. At `(24,145)`, the channel is 46.998: the prior renderer stores 46; the reference stores 47. Repeated raw reads agree. The font draws use nearest filtering/no mips, so no sampling change was made for this fix.
 
