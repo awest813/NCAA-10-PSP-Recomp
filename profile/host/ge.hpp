@@ -92,6 +92,7 @@ private:
     void light_vertex(const float pos[3], const float normal[3], float color[4], float secondary[3]) const;
 
     void draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVertex &c);
+    void draw_line(const ClipVertex &a, const ClipVertex &b);
     void raster_triangle(const Vertex &a, const Vertex &b, const Vertex &c);
     void draw_sprite(const Vertex &a, const Vertex &b);
     void emit_triangle(const Vertex &a, const Vertex &b, const Vertex &c);

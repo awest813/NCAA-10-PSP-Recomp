@@ -40,6 +40,8 @@ Blend optimizations must preserve overlapping primitive order, destination stenc
 
 GPU texture windows must wrap/clamp individual filter taps within their own bounds and expand packed source alpha before filtering. A masked alpha test can still require all source alpha bits after interpolation. Source feedback needs ordering with blending disabled and across separate surfaces that alias guest VRAM. Test overlapping format views and retain distinct source samples at higher internal resolutions; scaled rendering is not native PSP hardware evidence.
 
+Preserve line lists/strips and endpoint exclusion: NCAA uses them for field markings. Line-cell batching may merge only identical effective shader inputs and must respect feedback boundaries. Measure shader changes on ordinary scenes too; an extra varying caused a large native slowdown even with line draws omitted. Keep fractional/antialiased-line hardware claims separate from the selected software-reference behavior.
+
 ## State and documentation
 
 - Preserve local game files, prior diagnostic captures and save exports. Export/hash saves before replacing fixtures; keep baseline and progressed checkpoints identifiable.

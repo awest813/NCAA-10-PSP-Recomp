@@ -46,6 +46,198 @@ void expect_pixel(psprecomp::GuestMemory &memory, pspweb::GeGl *gl, std::uint32_
     assert(matches);
 }
 
+void line_coverage(bool use_gl) {
+    std::cout << "Line list/strip coverage: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    struct Case { float x0, y0, x1, y1; std::array<std::array<unsigned, 2>, 4> pixels; unsigned count; };
+    const std::array<Case, 10> cases = {{
+        {8, 8, 12, 8, {{{8,8}, {9,8}, {10,8}, {11,8}}}, 4},
+        {12, 8, 8, 8, {{{8,8}, {9,8}, {10,8}, {11,8}}}, 4},
+        {8, 8, 8, 12, {{{8,8}, {8,9}, {8,10}, {8,11}}}, 4},
+        {8, 12, 8, 8, {{{8,8}, {8,9}, {8,10}, {8,11}}}, 4},
+        {8, 8, 12, 12, {{{8,8}, {9,9}, {10,10}, {11,11}}}, 4},
+        {12, 12, 8, 8, {{{8,8}, {9,9}, {10,10}, {11,11}}}, 4},
+        {8, 8, 10, 12, {{{8,8}, {8,9}, {9,10}, {9,11}}}, 4},
+        {8.75f, 8.25f, 12.75f, 8.25f, {{{8,8}, {9,8}, {10,8}, {11,8}}}, 4},
+        {8, 8, 8, 8, {}, 0}, {8, 8, 8.75f, 8, {}, 0},
+    }};
+    auto clear = [&]() {
+        const std::array<float, 6> data = {0,0,0,64,64,0};
+        for (unsigned i=0; i<data.size(); ++i) memory.store32(vertices+i*4, std::bit_cast<unsigned>(data[i]));
+        DisplayList dl(memory);
+        dl.command(0x9C,0); dl.command(0x9D,64); dl.command(0xD2,3);
+        dl.command(0xD4,0); dl.command(0xD5,63|(63<<10));
+        dl.command(0x12,(3u<<7)|(1u<<23)); dl.command(0x1E,0); dl.command(0x21,0);
+        dl.command(0xD3,0x301); dl.command(0x55,0); dl.command(0x58,255);
+        dl.draw(6,2); dl.run(ge);
+    };
+    for (int scale : {1,2}) {
+        if (!use_gl && scale==2) continue;
+        if (use_gl) assert(gl.set_render_scale(scale)==scale);
+        for (const auto &test : cases) {
+            clear();
+            const std::array<float,6> data={test.x0,test.y0,0,test.x1,test.y1,0};
+            for (unsigned i=0; i<data.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(data[i]));
+            DisplayList dl(memory);
+            dl.command(0xD3,0); dl.command(0x55,255); dl.draw(1,2); dl.run(ge);
+            if (use_gl) { const auto downloads=gl.downloads(); gl.flush(); assert(gl.downloads()==downloads); }
+            for (unsigned y=4; y<16; ++y) for (unsigned x=4; x<16; ++x) {
+                bool covered=false;
+                for (unsigned i=0; i<test.count; ++i) covered|=test.pixels[i][0]==x && test.pixels[i][1]==y;
+                expect_pixel(memory,use_gl?&gl:nullptr,covered?255:0,0,0x04000000+(y*64+x)*4);
+            }
+        }
+        clear();
+        const std::array<float,9> strip={8,8,0,12,8,0,12,12,0};
+        for (unsigned i=0; i<strip.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(strip[i]));
+        DisplayList dl(memory);
+        dl.command(0xD3,0); dl.command(0x55,255); dl.command(0x58,128);
+        dl.command(0x21,1); dl.command(0xDF,0x32); dl.draw(2,3); dl.run(ge);
+        for (unsigned y=7; y<14; ++y) for (unsigned x=7; x<14; ++x) {
+            const bool covered=(y==8 && x>=8 && x<12)||(x==12 && y>=8 && y<12);
+            expect_pixel(memory,use_gl?&gl:nullptr,covered?128:0,0,0x04000000+(y*64+x)*4);
+        }
+    }
+}
+
+void line_attributes(bool use_gl) {
+    std::cout << "Line attributes, depth and clipping: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    auto clear = [&](float z=0) {
+        const std::array<float,6> data={0,0,z,64,64,z};
+        for (unsigned i=0; i<data.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(data[i]));
+        DisplayList dl(memory);
+        dl.command(0x9C,0); dl.command(0x9D,64); dl.command(0xD2,3);
+        dl.command(0x9E,0x100000); dl.command(0x9F,64);
+        dl.command(0xD4,0); dl.command(0xD5,63|(63<<10));
+        dl.command(0x12,(3u<<7)|(1u<<23)); dl.command(0x1E,0); dl.command(0x21,0);
+        dl.command(0x22,0); dl.command(0x23,0); dl.command(0xD3,0x701);
+        dl.command(0x55,0); dl.command(0x58,255); dl.draw(6,2); dl.run(ge);
+    };
+    for (bool smooth : {true,false}) {
+        clear();
+        const std::array<unsigned,8> data={0xFF000000,std::bit_cast<unsigned>(8.0f),std::bit_cast<unsigned>(8.0f),0,
+                                         0xFF0000FF,std::bit_cast<unsigned>(12.0f),std::bit_cast<unsigned>(8.0f),0};
+        for (unsigned i=0; i<data.size(); ++i) memory.store32(vertices+i*4,data[i]);
+        DisplayList dl(memory);
+        dl.command(0xD3,0); dl.command(0x12,(7u<<2)|(3u<<7)|(1u<<23)); dl.command(0x50,smooth?1:0);
+        dl.draw(1,2); dl.run(ge);
+        const std::array<unsigned,4> expected={0,63,127,191};
+        for (unsigned x=0; x<4; ++x) expect_pixel(memory,use_gl?&gl:nullptr,smooth?expected[x]:255,0,0x04000000+(8*64+8+x)*4);
+    }
+    clear();
+    memory.store32(vertices,0x00FFFFFF); memory.store32(vertices+16,0xFFFFFFFF);
+    memory.store32(vertices+4,std::bit_cast<unsigned>(8.0f)); memory.store32(vertices+8,std::bit_cast<unsigned>(8.0f)); memory.store32(vertices+12,0);
+    memory.store32(vertices+20,std::bit_cast<unsigned>(12.0f)); memory.store32(vertices+24,std::bit_cast<unsigned>(8.0f)); memory.store32(vertices+28,0);
+    DisplayList alpha(memory);
+    alpha.command(0xD3,0); alpha.command(0x12,(7u<<2)|(3u<<7)|(1u<<23)); alpha.command(0x50,1);
+    alpha.command(0x22,1); alpha.command(0xDB,2|(127<<8)|0xFF0000); alpha.draw(1,2); alpha.run(ge);
+    for (unsigned x=0; x<4; ++x) expect_pixel(memory,use_gl?&gl:nullptr,x==2?0xFFFFFF:0,0,0x04000000+(8*64+8+x)*4);
+
+    clear(50);
+    const std::array<float,6> zline={8,8,0,12,8,100};
+    for (unsigned i=0; i<zline.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(zline[i]));
+    DisplayList depth(memory);
+    depth.command(0xD3,0); depth.command(0x12,(3u<<7)|(1u<<23)); depth.command(0x55,255);
+    depth.command(0x23,1); depth.command(0xDE,4); depth.command(0xE7,0); depth.draw(1,2); depth.run(ge);
+    for (unsigned x=0; x<4; ++x) expect_pixel(memory,use_gl?&gl:nullptr,x<2?255:0,0,0x04000000+(8*64+8+x)*4);
+    memory.store32(vertices+8,std::bit_cast<unsigned>(20.0f)); memory.store32(vertices+20,std::bit_cast<unsigned>(20.0f));
+    DisplayList green(memory); green.command(0x55,0x00FF00); green.draw(1,2); green.run(ge);
+    for (unsigned x=0; x<4; ++x) expect_pixel(memory,use_gl?&gl:nullptr,x==0?255:0x00FF00,0,0x04000000+(8*64+8+x)*4);
+
+    clear();
+    const std::array<float,9> indexed={8,8,0,12,8,0,32,32,0};
+    for (unsigned i=0; i<indexed.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(indexed[i]));
+    constexpr unsigned indices=vertices+0x1000;
+    memory.store16(indices,1); memory.store16(indices+2,0); memory.store16(indices+4,2);
+    DisplayList index(memory);
+    index.command(0xD3,0); index.command(0x55,255); index.command(0x12,(3u<<7)|(2u<<11)|(1u<<23));
+    index.command(0x02,indices&0xFFFFFF); index.draw(1,3); index.run(ge);
+    for (unsigned x=8; x<12; ++x) expect_pixel(memory,use_gl?&gl:nullptr,255,0,0x04000000+(8*64+x)*4);
+    expect_pixel(memory,use_gl?&gl:nullptr,0);
+    clear();
+    const std::array<float,6> wide={-1000000,8,0,1000000,8,0};
+    for (unsigned i=0; i<wide.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(wide[i]));
+    DisplayList clipped(memory);
+    clipped.command(0xD3,0); clipped.command(0x55,255); clipped.command(0xD4,10|(8<<10));
+    clipped.command(0xD5,11|(8<<10)); clipped.draw(1,2); clipped.run(ge);
+    for (unsigned x=8; x<14; ++x) expect_pixel(memory,use_gl?&gl:nullptr,x>=10&&x<=11?255:0,0,0x04000000+(8*64+x)*4);
+    for (bool clamp : {false,true}) {
+        clear();
+        const std::array<float,6> clipped_positions={-.75f,0,-2,.75f,0,0};
+        for (unsigned i=0; i<clipped_positions.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(clipped_positions[i]));
+        DisplayList dl(memory);
+        dl.command(0xD3,0); dl.command(0x12,3u<<7); dl.command(0x1C,clamp?1:0); dl.command(0x55,255);
+        dl.number(0x42,32); dl.number(0x43,32); dl.number(0x44,32767);
+        dl.number(0x45,32); dl.number(0x46,32); dl.number(0x47,32767);
+        dl.command(0x3E,0);
+        for (float v:std::array<float,16>{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1}) dl.number(0x3F,v);
+        dl.draw(1,2); dl.run(ge);
+        for (unsigned x=8; x<=56; ++x)
+            expect_pixel(memory,use_gl?&gl:nullptr,clamp&&x>=32&&x<56?255:0,0,0x04000000+(32*64+x)*4);
+    }
+}
+
+void line_texture_lod() {
+    std::cout << "Line perspective textures and LOD: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory); pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl);
+    constexpr unsigned texture=vertices+0x1000;
+    for (unsigned x=0; x<8; ++x) memory.store32(texture+x*4,0xFF000000|x*30);
+    const std::array<float,10> perspective={0,.5f,-.75f,0,1,1,.5f,1.5f,0,2};
+    for (unsigned i=0; i<perspective.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(perspective[i]));
+    DisplayList projected(memory);
+    projected.command(0x9C,0); projected.command(0x9D,64); projected.command(0xD2,3);
+    projected.command(0xD4,0); projected.command(0xD5,63|(63<<10)); projected.command(0x12,3u|(3u<<7));
+    projected.number(0x42,32); projected.number(0x43,32); projected.number(0x44,32767);
+    projected.number(0x45,32); projected.number(0x46,32); projected.number(0x47,32767);
+    projected.command(0x3E,0);
+    for (float v:std::array<float,16>{1,0,0,0,0,1,0,0,0,0,0,1,0,0,0,0}) projected.number(0x3F,v);
+    projected.command(0x1E,1); projected.command(0xA0,texture&0xFFFFFF); projected.command(0xA8,0x080008);
+    projected.command(0xB8,3); projected.command(0xC3,3); projected.command(0xC9,3); projected.command(0xC8,1);
+    projected.draw(1,2); projected.run(ge);
+    expect_pixel(memory,&gl,60,0,0x04000000+(32*64+32)*4);
+    expect_pixel(memory,&gl,120,0,0x04000000+(32*64+44)*4);
+    for (unsigned level=0; level<3; ++level) {
+        const unsigned color=level==0?0x0000FF:level==1?0x00FF00:0xFF0000;
+        for (unsigned x=0; x<(64u>>level); ++x) memory.store32(texture+level*0x4000+x*4,0xFF000000|color);
+    }
+    ge.next_frame();
+    for (int scale:{1,2}) {
+        assert(gl.set_render_scale(scale)==scale);
+        for (unsigned mode:{0u,1u,2u}) {
+            const std::array<float,10> data={0,.5f,8,8,0,96,.5f,56,8,0};
+            for (unsigned i=0; i<data.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(data[i]));
+            DisplayList dl(memory);
+            dl.command(0x12,3u|(3u<<7)|(1u<<23)); dl.command(0xC2,2<<16); dl.command(0xC6,4); dl.command(0xC8,mode);
+            dl.number(0xD0,1);
+            for (unsigned level=0; level<3; ++level) {
+                dl.command(0xA0+level,(texture+level*0x4000)&0xFFFFFF); dl.command(0xA8+level,0x080000|(64>>level));
+                dl.command(0xB8+level,6-level);
+            }
+            const auto downloads=gl.downloads(); dl.draw(1,2); dl.run(ge); gl.flush(); assert(gl.downloads()==downloads);
+            expect_pixel(memory,&gl,mode==1?0x0000FF:0x00FF00,0,0x04000000+(8*64+32)*4);
+        }
+    }
+    // Varying clip w crosses the nearest-mip boundary halfway through the
+    // line. Equal-LOD runs must not merge across that change.
+    assert(gl.set_render_scale(1)==1);
+    const std::array<float,10> slope_positions={.5f,.5f,-.75f,0,1,.5f,.5f,1.5f,0,2};
+    for (unsigned i=0; i<slope_positions.size(); ++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(slope_positions[i]));
+    DisplayList slope(memory);
+    slope.command(0x12,3u|(3u<<7)); slope.command(0xC8,2); slope.number(0xD0,.5f);
+    slope.draw(1,2); slope.run(ge);
+    for (unsigned x:{8u,31u,32u,55u})
+        expect_pixel(memory,&gl,x<32?0x0000FF:0x00FF00,0,0x04000000+(32*64+x)*4);
+}
+
 void lighting_colors(bool use_gl) {
     psprecomp::GuestMemory memory;
     pspweb::GeGl gl(memory);
@@ -1771,6 +1963,8 @@ struct GlContext {
 };
 }
 int main() {
+    line_coverage(false);
+    line_attributes(false);
     lighting_colors(false);
     lighting_components(false);
     texture_coordinates(false);
@@ -1784,6 +1978,9 @@ int main() {
     interpolated_color_precision(false);
     texture_function_precision(false);
     GlContext context;
+    line_coverage(true);
+    line_attributes(true);
+    line_texture_lod();
     lighting_colors(true);
     lighting_components(true);
     texture_coordinates(true);

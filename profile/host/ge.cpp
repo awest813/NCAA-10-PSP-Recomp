@@ -1006,6 +1006,12 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
 
     auto vert = [&](std::uint32_t i) -> const ClipVertex & { return vertices[indices[i]]; };
     switch (type) {
+    case 1: // independent line pairs; an unmatched final vertex is ignored
+        for (std::uint32_t i = 0; i + 1u < count; i += 2u) draw_line(vert(i), vert(i + 1u));
+        break;
+    case 2: // connected line strip
+        for (std::uint32_t i = 1u; i < count; ++i) draw_line(vert(i - 1u), vert(i));
+        break;
     case 3: // triangles
         for (std::uint32_t i = 0; i + 2u < count; i += 3u) draw_triangle(vert(i), vert(i + 1u), vert(i + 2u));
         break;
@@ -1029,7 +1035,7 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
             emit_sprite(v, w);
         }
         break;
-    default: // lines: not rasterized yet
+    default:
         break;
     }
 }
@@ -1073,6 +1079,138 @@ void Ge::draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVerte
     if (out_count < 3u) return;
     const Vertex first = to_screen(out[0]);
     for (std::size_t i = 1; i + 1u < out_count; ++i) emit_triangle(first, to_screen(out[i]), to_screen(out[i + 1u]));
+}
+
+void Ge::draw_line(const ClipVertex &first, const ClipVertex &last) {
+    ClipVertex a = first, b = last;
+    if (!layout_.through) {
+        const bool depth_clamp = (regs_[0x1C] & 1u) != 0u;
+        if ((!depth_clamp && (a.cz < -a.cw || a.cz > a.cw || b.cz < -b.cw || b.cz > b.cw)) ||
+            (a.cz < -a.cw && b.cz < -b.cw) || (a.cz > a.cw && b.cz > b.cw)) return;
+        for (unsigned plane = 0; plane < 2; ++plane) {
+            const auto distance = [plane](const ClipVertex &v) { return plane == 0 ? v.cz + v.cw : v.cw - 1e-4f; };
+            const float da = distance(a), db = distance(b);
+            if (da < 0 && db < 0) return;
+            if ((da < 0) != (db < 0)) {
+                const float t = da / (da - db);
+                const auto mix = [t](float x, float y) { return x + (y - x) * t; };
+                const ClipVertex v{mix(a.cx,b.cx),mix(a.cy,b.cy),mix(a.cz,b.cz),mix(a.cw,b.cw),
+                    mix(a.u,b.u),mix(a.v,b.v),mix(a.r,b.r),mix(a.g,b.g),mix(a.b,b.b),mix(a.a,b.a),
+                    mix(a.sr,b.sr),mix(a.sg,b.sg),mix(a.sb,b.sb),mix(a.q,b.q),mix(a.fog,b.fog)};
+                if (da < 0) a = v; else b = v;
+            }
+        }
+    }
+    const Vertex p = to_screen(a), q = to_screen(b);
+    for (const Vertex *v : {&p, &q}) {
+        if (!std::isfinite(v->x) || !std::isfinite(v->y) || !std::isfinite(v->z) ||
+            std::abs(v->x) > 134217727.0f || std::abs(v->y) > 134217727.0f) return;
+        if (!layout_.through) {
+            const float sx = v->x + (regs_[kOffsetX] & 0xFFFFu) / 16.0f;
+            const float sy = v->y + (regs_[kOffsetY] & 0xFFFFu) / 16.0f;
+            if (sx < 0 || sy < 0 || sx >= 4095.96875f || sy >= 4095.96875f) return;
+        }
+    }
+    // Line coverage is stepped on the GE's 12.4 screen grid. The final endpoint
+    // is excluded, so a strip junction is drawn once rather than blended twice.
+    const double bias = layout_.through ? 0.0 : 0.375;
+    const double ax = std::trunc(p.x * 16.0 + bias), ay = std::trunc(p.y * 16.0 + bias);
+    const double bx = std::trunc(q.x * 16.0 + bias), by = std::trunc(q.y * 16.0 + bias);
+    double dx = bx - ax, dy = by - ay;
+    const auto steps = static_cast<std::int64_t>(std::max(std::abs(dx), std::abs(dy)) / 16.0);
+    if (steps == 0) return;
+    if (dx < 0 && dx >= -16) dx += 1;
+    if (dy < 0 && dy >= -16) dy += 1;
+    const double ix = dx / steps, iy = dy / steps;
+    const double x0 = ax - (ax > bx ? 1 : 0), y0 = ay - (ay > by ? 1 : 0);
+    double lo = 0, hi = static_cast<double>(steps - 1);
+    const auto clip = [&](double start, double inc, int low, int high) {
+        if (low > high) return false;
+        const double lower = low * 16.0, upper = (high + 1.0) * 16.0 - 1.0;
+        if (inc == 0) return start >= lower && start <= upper;
+        const double s = (lower - start) / inc, t = (upper - start) / inc;
+        lo = std::max(lo, std::ceil(std::min(s,t))); hi = std::min(hi, std::floor(std::max(s,t)));
+        return lo <= hi;
+    };
+    if (!clip(x0,ix,std::max(ps_.sx1,0),std::min(ps_.sx2,1023)) ||
+        !clip(y0,iy,std::max(ps_.sy1,0),std::min(ps_.sy2,1023))) return;
+    const auto begin = static_cast<std::int64_t>(lo), end = static_cast<std::int64_t>(hi);
+    const bool smooth = (regs_[kShadeMode] & 1u) != 0u;
+    const auto uv_at = [&](float t) {
+        const float s = 1.0f - t;
+        if (layout_.through) return std::array<float,2>{s*p.u+t*q.u,s*p.v+t*q.v};
+        if (p.u == q.u && p.v == q.v && p.q == q.q && p.q > 0)
+            return std::array<float,2>{p.u/p.q,p.v/p.q};
+        const float weight = s*p.q/p.w + t*q.q/q.w;
+        if (!(weight > 0)) return std::array<float,2>{tex_.tw-.5f,tex_.th-.5f};
+        return std::array<float,2>{(s*p.u/p.w+t*q.u/q.w)/weight,(s*p.v/p.w+t*q.v/q.w)/weight};
+    };
+    GlVertex run{};
+    float run_right=0, run_bottom=0;
+    bool have_run=false;
+    const auto flush_run = [&]() {
+        if (!have_run) return;
+        GlVertex right=run, bottom=run, corner=run;
+        right.x=corner.x=run_right; bottom.y=corner.y=run_bottom;
+        gl_->triangle(run,right,bottom); gl_->triangle(right,corner,bottom);
+        have_run=false;
+    };
+    const auto same_sample = [](const GlVertex &a, const GlVertex &b) {
+        return a.z==b.z && a.u==b.u && a.v==b.v && a.r==b.r && a.g==b.g && a.b==b.b && a.a==b.a &&
+            a.sr==b.sr && a.sg==b.sg && a.sb==b.sb && a.fog==b.fog && a.lod_footprint==b.lod_footprint;
+    };
+    const auto texture_address=(regs_[kTexAddr0]&0xFFFFF0u)|((regs_[kTexBufWidth0]&0x0F0000u)<<8u);
+    // Retain individual cells for possible direct VRAM surfaces, where merging
+    // could change source-feedback snapshots. Indexed formats always use a
+    // decoded texture, including palettes/textures stored in VRAM.
+    const bool merge_cells=!ps_.texture || (regs_[kTexFormat]&0xFu)>3u ||
+        (texture_address&0x3F000000u)!=0x04000000u;
+    double x = x0 + begin * ix, y = y0 + begin * iy;
+    for (std::int64_t i = begin; i <= end; ++i, x += ix, y += iy) {
+        const float t = static_cast<float>(i) / static_cast<float>(steps);
+        const auto channel = [&](float av, float bv) {
+            av = std::floor(clamp255(av)); bv = std::floor(clamp255(bv));
+            return smooth ? static_cast<float>(std::floor((static_cast<double>(av)*(steps-i)+static_cast<double>(bv)*i)/steps)) : bv;
+        };
+        const float r=channel(p.r,q.r), g=channel(p.g,q.g), blue=channel(p.b,q.b), alpha=channel(p.a,q.a);
+        const float sr=channel(p.sr,q.sr), sg=channel(p.sg,q.sg), sb=channel(p.sb,q.sb);
+        const float depth = static_cast<float>(std::floor((1.0-t)*std::floor(std::clamp(p.z,0.0f,65535.0f)) +
+                                                          t*std::floor(std::clamp(q.z,0.0f,65535.0f))));
+        const float fog = std::floor(std::clamp((1.0f-t)*p.fog+t*q.fog,0.0f,255.0f));
+        const auto uv = uv_at(t), next = uv_at(static_cast<float>(i+1)/static_cast<float>(steps));
+        const float ds = ix == 0 ? 0.0f : static_cast<float>((next[0]-uv[0])*16.0/ix);
+        const float dt = iy == 0 ? 0.0f : static_cast<float>((next[1]-uv[1])*16.0/iy);
+        const int px = static_cast<int>(x) / 16, py = static_cast<int>(y) / 16;
+        if (gl_ == nullptr) shade_pixel(px,py,depth,uv[0],uv[1],r,g,blue,alpha,sr,sg,sb,fog);
+        else {
+            // A logical pixel cell keeps line coverage and interpolation
+            // independent of host GL line-width/diamond-exit rules.
+            float footprint=std::max(std::abs(ds),std::abs(dt));
+            if ((regs_[0xC8]&3u)==2u) footprint=2.0f*((1.0f-t)*p.w+t*q.w)*cmd_float(regs_[0xD0]);
+            else if ((regs_[0xC8]&3u)!=0u) footprint=0;
+            // Only exponent/high mantissa bits affect GE LOD. Canonicalizing
+            // that key allows equal samples to share one rectangular run.
+            if (!(footprint>0)) footprint=0;
+            footprint=std::bit_cast<float>(std::bit_cast<std::uint32_t>(footprint)&0xFFF80000u);
+            GlVertex v{static_cast<float>(px),static_cast<float>(py),ps_.z_test||ps_.clear?depth:0.0f,1.0f,uv[0],uv[1],
+                static_cast<std::uint8_t>(r),static_cast<std::uint8_t>(g),static_cast<std::uint8_t>(blue),
+                static_cast<std::uint8_t>(alpha),static_cast<std::uint8_t>(sr),static_cast<std::uint8_t>(sg),
+                static_cast<std::uint8_t>(sb),0,1.0f,ps_.fog?fog:255.0f,footprint};
+            bool joined=false;
+            if (merge_cells && have_run && same_sample(run,v)) {
+                if (v.y==run.y && run_bottom==run.y+1) {
+                    if (v.x==run_right) { run_right+=1; joined=true; }
+                    else if (v.x+1==run.x) { run.x=v.x; joined=true; }
+                }
+                if (!joined && v.x==run.x && run_right==run.x+1) {
+                    if (v.y==run_bottom) { run_bottom+=1; joined=true; }
+                    else if (v.y+1==run.y) { run.y=v.y; joined=true; }
+                }
+            }
+            if (!joined) { flush_run(); run=v; run_right=v.x+1; run_bottom=v.y+1; have_run=true; }
+        }
+    }
+    if (gl_ != nullptr) flush_run();
 }
 
 void Ge::raster_triangle(const Vertex &a, const Vertex &b, const Vertex &c) {

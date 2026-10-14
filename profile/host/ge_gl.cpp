@@ -31,6 +31,7 @@ layout(location = 2) in vec4 a_color;
 layout(location = 3) in vec3 a_secondary;
 layout(location = 4) in float a_q;
 layout(location = 5) in float a_fog;
+layout(location = 6) in float a_lod_footprint;
 uniform vec2 u_target;
 uniform vec2 u_origin;
 out vec3 v_uv;
@@ -51,7 +52,9 @@ void main() {
     v_color = (a_color * 255.0) * w;
     v_secondary = (a_secondary * 255.0) * w;
     v_color_w = w;
-    v_lod_w = w * w;
+    // Line cells already carry resolved UV and their discrete sampling
+    // footprint. Reuse the otherwise-positive slope varying for that value.
+    v_lod_w = a_lod_footprint >= 0.0 ? -1.0 - a_lod_footprint : w * w;
 }
 )";
 
@@ -179,10 +182,10 @@ vec4 sample_mips(vec2 uv) {
     if (u_lod_params.x == 0.0) {
         vec2 dx = abs(dFdx(uv)) * u_lod_limits.z;
         vec2 dy = abs(dFdy(uv)) * u_lod_limits.z;
-        footprint = max(max(dx.x, dx.y), max(dy.x, dy.y));
+        footprint = v_lod_w < 0.0 ? -v_lod_w - 1.0 : max(max(dx.x, dx.y), max(dy.x, dy.y));
     } else if (u_lod_params.x == 2.0) {
         // Cancel perspective interpolation to recover screen-linear clip w.
-        footprint = 2.0 * (v_lod_w / v_color_w) * u_lod_params.z;
+        footprint = v_lod_w < 0.0 ? -v_lod_w - 1.0 : 2.0 * (v_lod_w / v_color_w) * u_lod_params.z;
     }
     // The GE's LOD fraction is the high four mantissa bits, rather than a
     // transcendental log2. Signed bias applies in all three modes.
@@ -693,6 +696,8 @@ bool GeGl::init() {
     glVertexAttribPointer(4, 1, GL_FLOAT, GL_FALSE, sizeof(GlVertex), reinterpret_cast<void *>(offsetof(GlVertex, q)));
     glEnableVertexAttribArray(5);
     glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, sizeof(GlVertex), reinterpret_cast<void *>(offsetof(GlVertex, fog)));
+    glEnableVertexAttribArray(6);
+    glVertexAttribPointer(6, 1, GL_FLOAT, GL_FALSE, sizeof(GlVertex), reinterpret_cast<void *>(offsetof(GlVertex, lod_footprint)));
     glGenVertexArrays(1, &present_vao_);
     glGenTextures(1, &scratch_texture_);
     glGenTextures(1, &destination_texture_);

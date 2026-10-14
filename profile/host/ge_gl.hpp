@@ -36,6 +36,7 @@ struct GlVertex {
     std::uint8_t sr{}, sg{}, sb{}, padding{};
     float q{1.0f};
     float fog{255.0f};
+    float lod_footprint{-1.0f}; // line-cell derivatives; negative uses ordinary triangle derivatives
 };
 
 // A rectangle copied by a GE block transfer.
