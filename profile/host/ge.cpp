@@ -2049,6 +2049,7 @@ void Ge::submit_gl_state() {
         st.mask_rgb = regs_[kMaskRgb] & 0xFFFFFFu;
         st.mask_alpha = regs_[kMaskAlpha] & 0xFFu;
         st.texture = p.texture;
+        st.through = layout_.through;
         st.fog = p.fog;
         st.fog_color = regs_[kFogColor] & 0xFFFFFFu;
     }
@@ -2138,11 +2139,13 @@ void Ge::emit_sprite(const Vertex &a, const Vertex &b) {
     const auto bl = static_cast<std::uint8_t>(clamp255(b.b)), al = static_cast<std::uint8_t>(clamp255(b.a));
     const auto sr = static_cast<std::uint8_t>(clamp255(b.sr)), sg = static_cast<std::uint8_t>(clamp255(b.sg));
     const auto sb = static_cast<std::uint8_t>(clamp255(b.sb));
-    const GlVertex tl{a.x, a.y, b.z, 1.0f, a.u, a.v, r, g, bl, al, sr, sg, sb, 0, a.q, b.fog};
-    const GlVertex tr{b.x, a.y, b.z, 1.0f, b.u, a.v, r, g, bl, al, sr, sg, sb, 0, b.q, b.fog};
-    const GlVertex bl_{a.x, b.y, b.z, 1.0f, a.u, b.v, r, g, bl, al, sr, sg, sb, 0, a.q, b.fog};
-    const GlVertex br{b.x, b.y, b.z, 1.0f, b.u, b.v, r, g, bl, al, sr, sg, sb, 0, b.q, b.fog};
+    GlVertex tl{a.x, a.y, b.z, a.w, a.u, a.v, r, g, bl, al, sr, sg, sb, 0, a.q, b.fog};
+    GlVertex tr{b.x, a.y, b.z, b.w, b.u, a.v, r, g, bl, al, sr, sg, sb, 0, b.q, b.fog};
+    GlVertex bl_{a.x, b.y, b.z, a.w, a.u, b.v, r, g, bl, al, sr, sg, sb, 0, a.q, b.fog};
+    GlVertex br{b.x, b.y, b.z, b.w, b.u, b.v, r, g, bl, al, sr, sg, sb, 0, b.q, b.fog};
+    tl.sprite_part = tr.sprite_part = bl_.sprite_part = GlVertex::kSpriteFirst;
     gl_->triangle(tl, tr, bl_);
+    tr.sprite_part = br.sprite_part = bl_.sprite_part = GlVertex::kSpriteSecond;
     gl_->triangle(tr, br, bl_);
 }
 

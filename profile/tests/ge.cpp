@@ -1780,6 +1780,55 @@ void ordered_dither(bool use_gl) {
     }
 }
 
+void fixed_uv_planes() {
+    std::cout << "Shared UV quantization, rectangle anchors and subtexel taps: GLES3" << std::endl;
+    psprecomp::GuestMemory memory; pspweb::GeGl gl(memory); pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl);
+    constexpr unsigned texture = vertices + 0x2000;
+    auto geometry = [&](const auto &data) {
+        gl.flush();
+        for (unsigned i = 0; i < data.size(); ++i) memory.store32(vertices + i * 4, std::bit_cast<unsigned>(data[i]));
+    };
+    auto setup = [&](DisplayList &dl, unsigned stride, unsigned tex_stride, unsigned size, unsigned filter) {
+        dl.command(0x9C, 0); dl.command(0x9D, stride); dl.command(0xD2, 3);
+        dl.command(0xD4, 0); dl.command(0xD5, (stride - 1) | (63 << 10));
+        dl.command(0x12, 3u | (3u << 7) | (1u << 23)); dl.command(0x1E, 1);
+        dl.command(0xA0, texture & 0xFFFFFF); dl.command(0xA8, 0x080000 | tex_stride);
+        dl.command(0xB8, size); dl.command(0xC2, 0); dl.command(0xC3, 3);
+        dl.command(0xC6, filter); dl.command(0xC7, 0); dl.command(0xC8, 1); dl.command(0xC9, 0x103);
+    };
+    for (unsigned i = 0; i < 4; ++i) memory.store32(texture + i * 4, i == 0 ? 0xFF0000FF : 0xFF00FF00);
+    geometry(std::array<float, 15>{4096.9375f, .5f, 8, 8, 0, 4097.1875f, .5f, 56, 8, 0,
+                                  4096.9375f, .5f, 32, 56, 0});
+    DisplayList shared(memory); setup(shared, 64, 4, 2, 0); shared.draw(); shared.run(ge);
+    // Shared 15-bit quantization discards low U bits before interpolation.
+    // Ordinary barycentric interpolation crosses into green texel 1 here.
+    expect_pixel(memory, &gl, 0x0000FF);
+
+    for (unsigned y = 0; y < 32; ++y) for (unsigned x = 0; x < 512; ++x)
+        memory.store32(texture + (y * 512 + x) * 4, y == 9 ? 0xFF0000FF : y == 10 ? 0xFF00FF00 : 0xFFFF0000);
+    ge.next_frame();
+    geometry(std::array<float, 15>{280, 0, 480, 0, 0, 280, 20, 480, 33, 0, 0, 20, 0, 33, 0});
+    DisplayList triangle(memory); setup(triangle, 512, 512, 9 | (5 << 8), 0); triangle.draw(); triangle.run(ge);
+    constexpr unsigned anchor_sample = 0x04000000 + (16 * 512 + 240) * 4;
+    expect_pixel(memory, &gl, 0x00FF00, 0, anchor_sample);
+    geometry(std::array<float, 10>{0, 0, 0, 0, 0, 280, 20, 480, 33, 0});
+    DisplayList rectangle(memory); rectangle.draw(6, 2); rectangle.run(ge);
+    // Both halves share the rectangle's first virtual-corner plane. An
+    // independently anchored second triangle would select green row 10.
+    expect_pixel(memory, &gl, 0x0000FF, 0, anchor_sample);
+
+    for (unsigned y = 0; y < 16; ++y) for (unsigned x = 0; x < 64; ++x)
+        memory.store32(texture + (y * 64 + x) * 4, x == 63 ? 0xFFFF0000 : 0xFF0000FF);
+    ge.next_frame();
+    geometry(std::array<float, 10>{0, 0, 0, 0, 0, 49, 15, 49, 15, 0});
+    DisplayList filtered(memory); setup(filtered, 64, 64, 6 | (4 << 8), 0x101);
+    filtered.draw(6, 2); filtered.run(ge);
+    // Non-power-of-two setup puts the first sample just below .5 texel;
+    // truncation to 7/16 leaves a 1/16 contribution from wrapped blue.
+    expect_pixel(memory, &gl, 0x0F00EF, 0, 0x04000000);
+}
+
 void texture_mipmaps() {
     std::cout << "Texture mipmap tests: GLES3" << std::endl;
     psprecomp::GuestMemory memory;
@@ -1830,8 +1879,8 @@ void texture_mipmaps() {
     draw(0, 0, 4, 256, 1, colors[2]); // LOD stays in native PSP pixel units
     assert(gl.set_render_scale(1) == 1);
     // A perspective triangle has clip w = 1, 1, 4. At the test pixel,
-    // screen-linear w is about 2.53; perspective-correct w is about 1.62.
-    // Slope .4 must therefore select mip 1, rather than mip 0.
+    // GE uses the interpolated reciprocal plane, rather than screen-linear w.
+    // Pinned 61e60ee6ff headless captures of this fixture select mip 0 (red).
     const std::array<float, 15> perspective = {.5f, .5f, -.75f, -.75f, 1,
                                               .5f, .5f, .75f, -.75f, 1,
                                               .5f, .5f, 0, 3, 4};
@@ -1846,7 +1895,7 @@ void texture_mipmaps() {
     for (float value : std::array<float, 16>{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0})
         projected.number(0x3F, value);
     projected.draw(); projected.run(ge);
-    expect_pixel(memory, &gl, colors[1]);
+    expect_pixel(memory, &gl, colors[0]);
     // Only the higher RAM level changes, while level zero retains its hash.
     for (unsigned i = 0; i < 32 * 32; ++i) memory.store32(texture + 0x4000 + i * 4, 0xFFFFFFFF);
     ge.next_frame();
@@ -2370,6 +2419,7 @@ int main() {
     surface_filter_feedback_order();
     surface_filter_scale_and_lod();
     texture_filters();
+    fixed_uv_planes();
     texture_mipmaps();
     mipmap_clut_and_vram();
     presentation_sampler_state();

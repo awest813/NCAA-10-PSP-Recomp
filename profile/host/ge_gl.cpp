@@ -1,4 +1,6 @@
 #include "ge_gl.hpp"
+#include "ge_plane_math.hpp"
+#include "ge_plane_shader.hpp"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -12,6 +14,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <utility>
 
 namespace pspweb {
 namespace {
@@ -24,7 +27,7 @@ constexpr std::uint32_t kMaxSurfaceStride = 1024u;
 constexpr GLsizei kStagingWidth = 2048, kStagingHeight = 512;
 constexpr std::size_t kIndexBufferPool = 512u;
 
-const char *kVertexShader = R"(#version 300 es
+const char *kVertexShader = R"glsl(#version 300 es
 layout(location = 0) in vec4 a_pos;
 layout(location = 1) in vec2 a_uv;
 layout(location = 2) in vec4 a_color;
@@ -57,9 +60,32 @@ void main() {
     // footprint. Reuse the otherwise-positive slope varying for that value.
     v_lod_w = a_lod_footprint >= 0.0 ? -1.0 - a_lod_footprint : w;
 }
-)";
+)glsl";
 
-const char *kFragmentShader = R"(#version 300 es
+const char *kPlaneVertexShader = R"glsl(#version 300 es
+layout(location = 0) in vec4 a_pos;
+layout(location = 2) in vec4 a_color;
+layout(location = 3) in vec3 a_secondary;
+layout(location = 5) in float a_fog;
+uniform vec2 u_target;
+uniform vec2 u_origin;
+out vec4 v_color;
+out vec3 v_secondary;
+out float v_fog;
+void main() {
+    v_fog = a_fog;
+    vec2 ndc = (a_pos.xy + u_origin) / u_target * 2.0 - 1.0;
+    float z = clamp(a_pos.z / 65535.0, 0.0, 1.0) * 2.0 - 1.0;
+    gl_Position = vec4(ndc, z, 1.0);
+    // Drawing-space positions, colors, fog and depth interpolate affinely.
+    // These inputs are normalized bytes, so recover their exact integers
+    // before interpolation. The fragment's interpolated result then floors.
+    v_color = floor(a_color * 255.0 + 0.5);
+    v_secondary = floor(a_secondary * 255.0 + 0.5);
+}
+)glsl";
+
+const std::string kFragmentShader = std::string(R"glsl(#version 300 es
 precision highp float;
 precision highp int;
 uniform sampler2D u_tex;
@@ -96,11 +122,15 @@ uniform vec2 u_lod_filter; // within-level min/mag linear filtering
 uniform bool u_dither;
 uniform ivec4 u_dither_rows;
 uniform vec2 u_origin;
+#ifndef PSPWEB_GE_PLANES
 in vec3 v_uv;
+#endif
 in vec4 v_color;
 in vec3 v_secondary;
 in float v_fog;
+#ifndef PSPWEB_GE_PLANES
 in float v_lod_w;
+#endif
 out vec4 o_color;
 bool compare(int f, int a, int b) {
     if (f == 0) return false;
@@ -154,9 +184,9 @@ vec4 mip_texel(ivec2 p, int level, ivec2 size) {
 }
 vec4 mip_level(vec2 uv, int level, bool linear) {
     ivec2 size = max(ivec2(u_tex_window.x > 0.0 ? u_tex_window : u_tex_size) >> level, ivec2(1));
-    // GE first truncates to eight fractional coordinate bits, including
-    // negative values, then uses four bits for bilinear weights.
-    vec2 at = trunc(uv * vec2(size) * 256.0) / 256.0;
+    // Native GE positions truncate to 1/16 texel. At higher internal
+    // resolutions retain the finer source grid before quantizing its taps.
+    vec2 at = uv * vec2(size);
     if (u_tex_window.x > 0.0) {
         // Preserve finer source samples at increased internal resolution.
         // LOD still uses PSP-space derivatives, independent of this scale.
@@ -164,6 +194,7 @@ vec4 mip_level(vec2 uv, int level, bool linear) {
         at *= vec2(scale);
         size *= scale;
     }
+    at = trunc(at * 16.0) / 16.0;
     vec4 color = vec4(0.0);
     if (!linear) {
         color = mip_texel(ivec2(floor(at)), level, size);
@@ -179,7 +210,50 @@ vec4 mip_level(vec2 uv, int level, bool linear) {
     }
     return color;
 }
+)glsl") + "\n#ifdef PSPWEB_GE_PLANES\n" + ge_plane::shader_math + R"glsl(
+float plane_fog = 255.0;
+float plane_q = 1.0, plane_grad = -1.0;
+bool plane_line = false;
+vec2 sample_plane(int record) {
+    plane_fog = 255.0;
+    ivec2 at = ivec2(floor((gl_FragCoord.xy / u_lod_limits.z - u_origin) * 16.0));
+    uvec4 meta = plane_word(record + 3);
+    if ((meta.y & 2u) != 0u) {
+        plane_line = true;
+        plane_q = 1.0;
+        plane_grad = uintBitsToFloat(meta.x);
+        if (u_fog_enable)
+            plane_fog = plane_value(plane_word(record + 4), at);
+        return vec2(uintBitsToFloat(meta.z), uintBitsToFloat(meta.w));
+    }
+    float s = plane_value(plane_word(record), at), t = plane_value(plane_word(record + 1), at);
+    uvec4 qp = plane_word(record + 2);
+    float pixel_q = plane_value(qp, at);
+    plane_q = pixel_q;
+    plane_grad = uintBitsToFloat(meta.x);
+    plane_line = (meta.y & 2u) != 0u;
+    if (u_fog_enable)
+        plane_fog = plane_value(plane_word(record + 4), at);
+    if ((meta.y & 1u) != 0u) {
+        plane_q = 1.0;
+        return vec2(s, t);
+    }
+    vec2 size = u_tex_window.x > 0.0 ? u_tex_window : u_tex_size;
+    if ((meta.y & 32u) != 0u)
+        plane_q = plane_lod_q(record, qp, at, meta.y);
+    if (!(pixel_q > 0.0))
+        return size - 0.5;
+    float r = plane_recip(pixel_q);
+    return vec2(plane_product(s, r), plane_product(t, r)) * size;
+}
+#endif
 vec4 sample_mips(vec2 uv) {
+#ifdef PSPWEB_GE_PLANES
+    float detail = 0.0;
+    if (u_lod_params.x == 0.0) detail = plane_log16(plane_grad) - (plane_line ? 0.0 : plane_log16(plane_q));
+    else if (u_lod_params.x == 2.0) detail = plane_line ? plane_log16(plane_grad) : 16.0 + plane_log16(u_lod_params.z) - plane_log16(plane_q);
+    detail /= 16.0;
+#else
     float footprint = 1.0;
     if (u_lod_params.x == 0.0) {
         vec2 dx = abs(dFdx(uv)) * u_lod_limits.z;
@@ -193,6 +267,7 @@ vec4 sample_mips(vec2 uv) {
     // transcendental log2. Signed bias applies in all three modes.
     uint bits = floatBitsToUint(max(footprint, 0.000000001));
     float detail = float(int((bits >> 23u) & 255u) - 127) + float((bits >> 19u) & 15u) / 16.0;
+#endif
     detail += u_lod_params.y;
     bool linear = (detail > 0.0 ? u_lod_filter.x : u_lod_filter.y) > 0.0;
     float lod = clamp(detail, 0.0, u_lod_limits.x);
@@ -245,6 +320,7 @@ void main() {
     // The GE stores integer 16-bit depth. Preserve that precision before
     // comparisons even though the host attachment has 24 depth bits.
     gl_FragDepth = floor(gl_FragCoord.z * 65535.0) / 65535.0;
+    float resolved_fog = v_fog;
     vec4 primary = v_color;
     vec4 c = primary / 255.0;
     if (u_clear) {
@@ -257,6 +333,10 @@ void main() {
     c = primary / 255.0;
     if (u_tex_enable) {
         vec2 uv;
+#ifdef PSPWEB_GE_PLANES
+        uv = sample_plane(int(floor(-v_fog - 0.5)));
+        resolved_fog = plane_fog;
+#else
         if (v_uv.z > 0.0) uv = v_uv.xy / v_uv.z;
         else {
             vec2 size = u_tex_window.x > 0.0 ? u_tex_window : u_tex_size;
@@ -264,6 +344,7 @@ void main() {
             // below size can round to size in the GPU sampler and wrap to 0.
             uv = size - 0.5;
         }
+#endif
         vec4 t = sample_mips(uv);
         // GE texture functions operate on byte channels, before blending or
         // alpha tests. Preserve the division's truncation and double RGB first.
@@ -300,14 +381,14 @@ void main() {
     if (u_fog_enable) {
         // Fog, like color, interpolates in screen space. GE blends 8-bit
         // channels with a truncated 8-bit factor and rounds the result up.
-        float fog = clamp(floor(v_fog), 0.0, 255.0);
+        float fog = clamp(floor(resolved_fog), 0.0, 255.0);
         vec3 rgb = floor(c.rgb * 255.0 + 0.5);
         c.rgb = floor((rgb * fog + u_fog_color * (255.0 - fog) + 255.0) / 256.0) / 255.0;
     }
     if (u_shader_blend) c.rgb = blend_rgb(c);
     o_color = quantize_output(c);
 }
-)";
+)glsl";
 
 const char *kReinterpretVertexShader = R"(#version 300 es
 void main() {
@@ -623,11 +704,43 @@ void GeGl::set_uniform_int(GLint location, int value) {
 }
 
 bool GeGl::init() {
-    program_ = link(kVertexShader, kFragmentShader);
+    std::string wide_fragment = kFragmentShader;
+    wide_fragment.insert(wide_fragment.find('\n') + 1, "#define PSPWEB_GE_PLANES 1\n");
+    std::string fast_fragment = wide_fragment;
+    fast_fragment.insert(fast_fragment.find('\n') + 1, "#define PSPWEB_FAST_COVERAGE 1\n");
+    program_ = link(kPlaneVertexShader, fast_fragment.c_str());
+    wide_program_ = link(kPlaneVertexShader, wide_fragment.c_str());
+    normal_program_ = program_;
+    compatibility_program_ = link(kVertexShader, kFragmentShader.c_str());
+    if (!program_ || !wide_program_ || !compatibility_program_)
+        return false;
     present_program_ = link(kPresentVertexShader, kPresentFragmentShader);
     u_target_ = glGetUniformLocation(program_, "u_target");
     u_origin_ = glGetUniformLocation(program_, "u_origin");
     u_tex_ = glGetUniformLocation(program_, "u_tex");
+    u_planes_ = glGetUniformLocation(program_, "u_planes");
+    u_reciprocal_ = glGetUniformLocation(program_, "u_reciprocal");
+    glGenTextures(3, plane_atlases_.data());
+    plane_texture_ = plane_atlases_[0];
+    glUseProgram(program_);
+    glUniform1i(u_planes_, 2);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, plane_texture_);
+    const std::array<unsigned, 4> zero{};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, 1, 1, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, zero.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glGenTextures(1, &reciprocal_texture_);
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, reciprocal_texture_);
+    std::array<std::array<unsigned, 4>, 128> observations{};
+    for (unsigned i = 0; i < 128; ++i)
+        observations[i] = {unsigned(ge_math::reciprocal_segments[i].start), unsigned(ge_math::reciprocal_segments[i].slope), 0, 0};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, 128, 1, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, observations.data());
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glUniform1i(u_reciprocal_, 3);
+    glActiveTexture(GL_TEXTURE0);
     u_tex_enable_ = glGetUniformLocation(program_, "u_tex_enable");
     u_tex_size_ = glGetUniformLocation(program_, "u_tex_size");
     u_tex_origin_ = glGetUniformLocation(program_, "u_tex_origin");
@@ -719,9 +832,8 @@ bool GeGl::init() {
     // Index = mag_linear | clamp_u << 1 | clamp_v << 2 | min_linear << 3 | mip << 4.
     glGenSamplers(32, samplers_);
     for (int i = 0; i < 32; ++i) {
-        const GLint min_filter = (i & 16) != 0
-            ? ((i & 8) != 0 ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST)
-            : ((i & 8) != 0 ? GL_LINEAR : GL_NEAREST);
+        const GLint min_filter =
+            (i & 16) != 0 ? ((i & 8) != 0 ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST) : ((i & 8) != 0 ? GL_LINEAR : GL_NEAREST);
         glSamplerParameteri(samplers_[i], GL_TEXTURE_MIN_FILTER, min_filter);
         glSamplerParameteri(samplers_[i], GL_TEXTURE_MAG_FILTER, (i & 1) != 0 ? GL_LINEAR : GL_NEAREST);
         glSamplerParameteri(samplers_[i], GL_TEXTURE_WRAP_S, (i & 2) != 0 ? GL_CLAMP_TO_EDGE : GL_REPEAT);
@@ -744,6 +856,70 @@ bool GeGl::init() {
     glReadBuffer(GL_NONE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindVertexArray(0);
+    for (auto [slot, name] : std::array{
+             std::pair{&u_target_, "u_target"},
+             std::pair{&u_origin_, "u_origin"},
+             std::pair{&u_tex_, "u_tex"},
+             std::pair{&u_planes_, "u_planes"},
+             std::pair{&u_reciprocal_, "u_reciprocal"},
+             std::pair{&u_tex_enable_, "u_tex_enable"},
+             std::pair{&u_tex_size_, "u_tex_size"},
+             std::pair{&u_tex_origin_, "u_tex_origin"},
+             std::pair{&u_tex_func_, "u_tex_func"},
+             std::pair{&u_tex_alpha_, "u_tex_alpha"},
+             std::pair{&u_tex_double_, "u_tex_double"},
+             std::pair{&u_env_, "u_env"},
+             std::pair{&u_alpha_test_, "u_alpha_test"},
+             std::pair{&u_alpha_func_, "u_alpha_func"},
+             std::pair{&u_alpha_ref_, "u_alpha_ref"},
+             std::pair{&u_alpha_mask_, "u_alpha_mask"},
+             std::pair{&u_shader_blend_, "u_shader_blend"},
+             std::pair{&u_destination_, "u_destination"},
+             std::pair{&u_read_destination_, "u_read_destination"},
+             std::pair{&u_blend_src_, "u_blend_src"},
+             std::pair{&u_blend_dst_, "u_blend_dst"},
+             std::pair{&u_blend_equation_, "u_blend_equation"},
+             std::pair{&u_fix_a_, "u_fix_a"},
+             std::pair{&u_fix_b_, "u_fix_b"},
+             std::pair{&u_output_format_, "u_output_format"},
+             std::pair{&u_clear_, "u_clear"},
+             std::pair{&u_tex_window_, "u_tex_window"},
+             std::pair{&u_tex_clamp_, "u_tex_clamp"},
+             std::pair{&u_tex_format_, "u_tex_format"},
+             std::pair{&u_fog_enable_, "u_fog_enable"},
+             std::pair{&u_secondary_enable_, "u_secondary_enable"},
+             std::pair{&u_fog_color_, "u_fog_color"},
+             std::pair{&u_lod_params_, "u_lod_params"},
+             std::pair{&u_lod_limits_, "u_lod_limits"},
+             std::pair{&u_lod_filter_, "u_lod_filter"},
+             std::pair{&u_dither_, "u_dither"},
+             std::pair{&u_dither_rows_, "u_dither_rows"},
+         })
+        draw_locations_.push_back(
+            {slot, *slot, glGetUniformLocation(wide_program_, name), glGetUniformLocation(compatibility_program_, name)});
+    glUseProgram(wide_program_);
+    glUniform1i(glGetUniformLocation(wide_program_, "u_tex"), 0);
+    glUniform1i(glGetUniformLocation(wide_program_, "u_destination"), 1);
+    glUniform1i(glGetUniformLocation(wide_program_, "u_planes"), 2);
+    glUniform1i(glGetUniformLocation(wide_program_, "u_reciprocal"), 3);
+    glUseProgram(compatibility_program_);
+    glUniform1i(glGetUniformLocation(compatibility_program_, "u_tex"), 0);
+    glUniform1i(glGetUniformLocation(compatibility_program_, "u_destination"), 1);
+    glUseProgram(0);
+    compatibility_vao_ = vao_;
+    glGenVertexArrays(1, &normal_vao_);
+    vao_ = normal_vao_;
+    glBindVertexArray(vao_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(PlaneVertex), reinterpret_cast<void *>(offsetof(PlaneVertex, x)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PlaneVertex), reinterpret_cast<void *>(offsetof(PlaneVertex, r)));
+    glEnableVertexAttribArray(3);
+    glVertexAttribPointer(3, 3, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(PlaneVertex), reinterpret_cast<void *>(offsetof(PlaneVertex, sr)));
+    glEnableVertexAttribArray(5);
+    glVertexAttribPointer(5, 1, GL_FLOAT, GL_FALSE, sizeof(PlaneVertex), reinterpret_cast<void *>(offsetof(PlaneVertex, fog)));
+    glBindVertexArray(0);
     return glGetError() == GL_NO_ERROR;
 }
 
@@ -753,16 +929,19 @@ int GeGl::max_render_scale() const {
     glGetIntegerv(GL_MAX_RENDERBUFFER_SIZE, &max_renderbuffer);
     const GLint limit = std::min(max_texture, max_renderbuffer);
     int scale = 4;
-    while (scale > 1 && static_cast<GLint>(kMaxSurfaceStride) * scale > limit) --scale;
+    while (scale > 1 && static_cast<GLint>(kMaxSurfaceStride) * scale > limit)
+        --scale;
     return scale;
 }
 
 int GeGl::set_render_scale(int scale) {
     scale = std::clamp(scale, 1, max_render_scale());
-    if (scale == scale_) return scale_;
+    if (scale == scale_)
+        return scale_;
     flush();
     for (auto &s : surfaces_) {
-        if (!s.alive) continue;
+        if (!s.alive)
+            continue;
         download(s);
         glDeleteFramebuffers(1, &s.fbo);
         glDeleteTextures(1, &s.color);
@@ -797,11 +976,14 @@ void GeGl::blit(GLuint from, const GLint src[4], GLuint to, const GLint dst[4], 
 // Surfaces
 
 bool GeGl::locate(const Surface &s, std::uint32_t offset, int &ox, int &oy) const {
-    if (!s.alive || offset < s.offset) return false;
+    if (!s.alive || offset < s.offset)
+        return false;
     const std::uint32_t diff = offset - s.offset, bpp = bpp_of(s.format);
-    if (diff % bpp != 0u) return false;
+    if (diff % bpp != 0u)
+        return false;
     const std::uint32_t row = diff / row_bytes(s);
-    if (row >= s.height) return false;
+    if (row >= s.height)
+        return false;
     oy = static_cast<int>(row);
     ox = static_cast<int>((diff % row_bytes(s)) / bpp);
     return true;
@@ -809,19 +991,23 @@ bool GeGl::locate(const Surface &s, std::uint32_t offset, int &ox, int &oy) cons
 
 GeGl::Surface *GeGl::find_surface(std::uint32_t offset, std::uint32_t stride, std::uint32_t format, int &ox, int &oy) {
     for (auto &s : surfaces_)
-        if (s.alive && s.stride == stride && s.format == format && locate(s, offset, ox, oy)) return &s;
+        if (s.alive && s.stride == stride && s.format == format && locate(s, offset, ox, oy))
+            return &s;
     return nullptr;
 }
 
 bool GeGl::is_gpu_target(std::uint32_t address, std::uint32_t format, std::uint32_t buf_width) const {
     const std::uint32_t offset = vram_offset(address);
-    if (offset == kNotVram) return false;
+    if (offset == kNotVram)
+        return false;
     for (const auto &s : surfaces_) {
         int ox = 0, oy = 0;
-        if (!s.alive || s.stride != buf_width || s.format != format || !locate(s, offset, ox, oy)) continue;
+        if (!s.alive || s.stride != buf_width || s.format != format || !locate(s, offset, ox, oy))
+            continue;
         if (static_cast<std::size_t>(oy) < s.rows.size()) {
             const auto &row = s.rows[static_cast<std::size_t>(oy)];
-            if (row.cx0 <= ox && ox <= row.cx1) return true;
+            if (row.cx0 <= ox && ox <= row.cx1)
+                return true;
         }
     }
     return false;
@@ -861,7 +1047,8 @@ void GeGl::allocate(Surface &s, std::uint32_t height) {
 // Reallocates `s` taller, keeping its pixels with a GPU blit.
 void GeGl::grow(Surface &s, std::uint32_t height) {
     height = std::min(height, kMaxSurfaceHeight);
-    if (height <= s.height) return;
+    if (height <= s.height)
+        return;
     Surface old = s;
     allocate(s, height);
     const GLint area[4] = {0, 0, static_cast<GLint>(s.stride) * scale_, static_cast<GLint>(old.height) * scale_};
@@ -876,14 +1063,16 @@ void GeGl::grow(Surface &s, std::uint32_t height) {
 // Moves `from` (same layout, starting inside `into`) into `into` with a GPU blit.
 void GeGl::absorb(Surface &into, Surface &from) {
     int ox = 0, oy = 0;
-    if (!locate(into, from.offset, ox, oy)) return;
+    if (!locate(into, from.offset, ox, oy))
+        return;
     apply_pending_uploads(into);
     apply_pending_uploads(from);
     for (Surface *each : {&into, &from}) {
         resolve_alpha(*each, whole(*each));
         resolve_stencil(*each);
     }
-    if (static_cast<std::uint32_t>(oy) + from.height > into.height) grow(into, static_cast<std::uint32_t>(oy) + from.height);
+    if (static_cast<std::uint32_t>(oy) + from.height > into.height)
+        grow(into, static_cast<std::uint32_t>(oy) + from.height);
     const int w = std::min(static_cast<int>(from.stride), static_cast<int>(into.stride) - ox);
     const int h = std::min(static_cast<int>(from.height), static_cast<int>(into.height) - oy);
     if (w > 0 && h > 0) {
@@ -892,16 +1081,24 @@ void GeGl::absorb(Surface &into, Surface &from) {
         blit(from.fbo, src, into.fbo, dst, GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     }
     // Carry the drawn and dirty extents over row by row.
-    if (into.rows.size() < into.height) into.rows.resize(into.height);
+    if (into.rows.size() < into.height)
+        into.rows.resize(into.height);
     for (std::size_t y = 0; y < from.rows.size(); ++y) {
         const auto &src = from.rows[y];
         const std::size_t ty = y + static_cast<std::size_t>(oy);
-        if (ty >= into.rows.size()) break;
+        if (ty >= into.rows.size())
+            break;
         auto &dst = into.rows[ty];
         auto merge = [ox](int &d0, int &d1, int s0, int s1) {
-            if (s1 < s0) return;
-            if (d1 < d0) { d0 = s0 + ox; d1 = s1 + ox; }
-            else { d0 = std::min(d0, s0 + ox); d1 = std::max(d1, s1 + ox); }
+            if (s1 < s0)
+                return;
+            if (d1 < d0) {
+                d0 = s0 + ox;
+                d1 = s1 + ox;
+            } else {
+                d0 = std::min(d0, s0 + ox);
+                d1 = std::max(d1, s1 + ox);
+            }
         };
         merge(dst.cx0, dst.cx1, src.cx0, src.cx1);
         merge(dst.dx0, dst.dx1, src.dx0, src.dx1);
@@ -913,22 +1110,26 @@ void GeGl::absorb(Surface &into, Surface &from) {
     glDeleteFramebuffers(1, &from.fbo);
     glDeleteTextures(1, &from.color);
     glDeleteRenderbuffers(1, &from.depth);
-    if (current_ == &from) current_ = nullptr;
+    if (current_ == &from)
+        current_ = nullptr;
     reset_cache();
 }
 
-GeGl::Surface &GeGl::surface_for_draw(std::uint32_t offset, std::uint32_t stride, std::uint32_t format,
-                                      std::uint32_t rows, int &ox, int &oy) {
+GeGl::Surface &GeGl::surface_for_draw(std::uint32_t offset, std::uint32_t stride, std::uint32_t format, std::uint32_t rows, int &ox,
+                                      int &oy) {
     rows = std::clamp(rows, 1u, kMaxSurfaceHeight);
     stride = std::max(stride, 1u);
     const std::uint32_t bpp = bpp_of(format);
     for (auto &s : surfaces_) {
-        if (!s.alive || s.stride != stride || s.format != format || offset < s.offset) continue;
+        if (!s.alive || s.stride != stride || s.format != format || offset < s.offset)
+            continue;
         const std::uint32_t diff = offset - s.offset;
-        if (diff % bpp != 0u || diff / row_bytes(s) >= s.height) continue;
+        if (diff % bpp != 0u || diff / row_bytes(s) >= s.height)
+            continue;
         oy = static_cast<int>(diff / row_bytes(s));
         ox = static_cast<int>((diff % row_bytes(s)) / bpp);
-        if (static_cast<std::uint32_t>(oy) + rows > s.height) grow(s, static_cast<std::uint32_t>(oy) + rows);
+        if (static_cast<std::uint32_t>(oy) + rows > s.height)
+            grow(s, static_cast<std::uint32_t>(oy) + rows);
         return s;
     }
     surfaces_.emplace_back();
@@ -940,10 +1141,13 @@ GeGl::Surface &GeGl::surface_for_draw(std::uint32_t offset, std::uint32_t stride
     upload_rect(n, Rect{0, 0, static_cast<int>(n.stride) - 1, static_cast<int>(n.height) - 1});
     // Surfaces of the same layout that start inside the new one become part of it.
     for (auto &s : surfaces_) {
-        if (&s == &n || !s.alive || s.stride != stride || s.format != format || s.offset <= offset) continue;
+        if (&s == &n || !s.alive || s.stride != stride || s.format != format || s.offset <= offset)
+            continue;
         const std::uint32_t diff = s.offset - offset;
-        if (diff % bpp != 0u || diff / row_bytes(n) >= kMaxSurfaceHeight) continue;
-        if (diff / row_bytes(n) >= n.height && diff / row_bytes(n) >= rows) continue;
+        if (diff % bpp != 0u || diff / row_bytes(n) >= kMaxSurfaceHeight)
+            continue;
+        if (diff / row_bytes(n) >= n.height && diff / row_bytes(n) >= rows)
+            continue;
         absorb(n, s);
     }
     ox = 0;
@@ -952,10 +1156,12 @@ GeGl::Surface &GeGl::surface_for_draw(std::uint32_t offset, std::uint32_t stride
 }
 
 void GeGl::apply_pending_uploads(Surface &s) {
-    if (s.pending_uploads.empty()) return;
+    if (s.pending_uploads.empty())
+        return;
     std::vector<Rect> rects;
     rects.swap(s.pending_uploads);
-    for (const Rect &r : rects) upload_rect(s, r);
+    for (const Rect &r : rects)
+        upload_rect(s, r);
 }
 
 void GeGl::download(Surface &s) {
@@ -970,7 +1176,8 @@ void GeGl::download(Surface &s) {
         s.rows[y].dx0 = 0;
         s.rows[y].dx1 = -1;
     }
-    if (vram == nullptr || r.empty()) return;
+    if (vram == nullptr || r.empty())
+        return;
     ++downloads_;
     const auto x0 = static_cast<std::uint32_t>(r.x0), y0 = static_cast<std::uint32_t>(r.y0);
     const auto w = static_cast<std::uint32_t>(r.x1 - r.x0 + 1), h = static_cast<std::uint32_t>(r.y1 - r.y0 + 1);
@@ -982,8 +1189,8 @@ void GeGl::download(Surface &s) {
     } else {
         // Shrink to native size first; VRAM holds PSP pixels.
         const auto sw = std::min(static_cast<GLint>(w), kStagingWidth), sh = std::min(static_cast<GLint>(h), kStagingHeight);
-        const GLint src[4] = {static_cast<GLint>(x0) * scale_, static_cast<GLint>(y0) * scale_,
-                              (static_cast<GLint>(x0) + sw) * scale_, (static_cast<GLint>(y0) + sh) * scale_};
+        const GLint src[4] = {static_cast<GLint>(x0) * scale_, static_cast<GLint>(y0) * scale_, (static_cast<GLint>(x0) + sw) * scale_,
+                              (static_cast<GLint>(y0) + sh) * scale_};
         const GLint dst[4] = {0, 0, sw, sh};
         blit(s.fbo, src, staging_fbo_, dst, GL_COLOR_BUFFER_BIT);
         glBindFramebuffer(GL_FRAMEBUFFER, staging_fbo_);
@@ -994,9 +1201,11 @@ void GeGl::download(Surface &s) {
         const auto &span = spans[y0 + y];
         for (std::uint32_t x = 0; x < w; ++x) {
             const auto px = static_cast<int>(x0 + x);
-            if (px < span.first || px > span.second) continue; // only pixels the GPU drew
+            if (px < span.first || px > span.second)
+                continue; // only pixels the GPU drew
             const std::uint32_t at = s.offset + ((y0 + y) * s.stride + x0 + x) * bpp;
-            if (at + bpp > kVramSize) break;
+            if (at + bpp > kVramSize)
+                break;
             std::uint32_t rgba;
             std::memcpy(&rgba, &pixels_[(static_cast<std::size_t>(y) * w + x) * 4u], 4u);
             if (bpp == 4u) {
@@ -1008,14 +1217,16 @@ void GeGl::download(Surface &s) {
             }
         }
     }
-    if (vram_write_hook_) vram_write_hook_(0x04000000u + s.offset + y0 * s.stride * bpp, h * s.stride * bpp);
+    if (vram_write_hook_)
+        vram_write_hook_(0x04000000u + s.offset + y0 * s.stride * bpp, h * s.stride * bpp);
     cache_.fbo = ~0u;
 }
 
 void GeGl::upload_rect(Surface &s, const Rect &rect) {
     const std::uint8_t *vram = memory_.raw_pointer(0x04000000u, kVramSize);
     const Rect r = rect.clip(Rect{0, 0, static_cast<int>(s.stride) - 1, static_cast<int>(s.height) - 1});
-    if (vram == nullptr || r.empty()) return;
+    if (vram == nullptr || r.empty())
+        return;
     alpha_will_change(s, r);
     ++uploads_;
     upload_pixels_ += static_cast<std::uint64_t>(r.x1 - r.x0 + 1) * static_cast<std::uint64_t>(r.y1 - r.y0 + 1);
@@ -1031,23 +1242,27 @@ void GeGl::upload_rect(Surface &s, const Rect &rect) {
         }
         for (std::uint32_t x = 0; x < w; ++x) {
             const std::uint32_t at = s.offset + ((y0 + y) * s.stride + x0 + x) * bpp;
-            if (at + bpp > kVramSize) break;
+            if (at + bpp > kVramSize)
+                break;
             std::uint32_t rgba;
-            if (bpp == 4u) std::memcpy(&rgba, vram + at, 4u);
-            else rgba = to_rgba(static_cast<std::uint32_t>(vram[at]) | (static_cast<std::uint32_t>(vram[at + 1u]) << 8u), s.format);
+            if (bpp == 4u)
+                std::memcpy(&rgba, vram + at, 4u);
+            else
+                rgba = to_rgba(static_cast<std::uint32_t>(vram[at]) | (static_cast<std::uint32_t>(vram[at + 1u]) << 8u), s.format);
             std::memcpy(&pixels_[(static_cast<std::size_t>(y) * w + x) * 4u], &rgba, 4u);
         }
     }
     if (s.format != 0u) {
         std::uint32_t bits = 0u;
-        for (std::size_t i = 3; i < pixels_.size(); i += 4u) bits |= pixels_[i];
+        for (std::size_t i = 3; i < pixels_.size(); i += 4u)
+            bits |= pixels_[i];
         s.alpha_bits |= bits;
     }
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     if (scale_ == 1) {
         glBindTexture(GL_TEXTURE_2D, s.color);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(x0), static_cast<GLint>(y0), static_cast<GLsizei>(w),
-                        static_cast<GLsizei>(h), GL_RGBA, GL_UNSIGNED_BYTE, pixels_.data());
+        glTexSubImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(x0), static_cast<GLint>(y0), static_cast<GLsizei>(w), static_cast<GLsizei>(h),
+                        GL_RGBA, GL_UNSIGNED_BYTE, pixels_.data());
     } else {
         // Upload at native size, then stretch into the surface.
         const auto sw = std::min(static_cast<GLint>(w), kStagingWidth), sh = std::min(static_cast<GLint>(h), kStagingHeight);
@@ -1056,8 +1271,8 @@ void GeGl::upload_rect(Surface &s, const Rect &rect) {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, sw, sh, GL_RGBA, GL_UNSIGNED_BYTE, pixels_.data());
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         const GLint src[4] = {0, 0, sw, sh};
-        const GLint dst[4] = {static_cast<GLint>(x0) * scale_, static_cast<GLint>(y0) * scale_,
-                              (static_cast<GLint>(x0) + sw) * scale_, (static_cast<GLint>(y0) + sh) * scale_};
+        const GLint dst[4] = {static_cast<GLint>(x0) * scale_, static_cast<GLint>(y0) * scale_, (static_cast<GLint>(x0) + sw) * scale_,
+                              (static_cast<GLint>(y0) + sh) * scale_};
         blit(staging_fbo_, src, s.fbo, dst, GL_COLOR_BUFFER_BIT);
     }
     cache_.texture = ~0u;
@@ -1066,28 +1281,35 @@ void GeGl::upload_rect(Surface &s, const Rect &rect) {
 GeGl::Rect GeGl::overlap(const Surface &s, const TransferRect &rect) const {
     Rect out;
     const std::uint32_t base = vram_offset(rect.base);
-    if (!s.alive || base == kNotVram || rect.width == 0u || rect.height == 0u) return out;
+    if (!s.alive || base == kNotVram || rect.width == 0u || rect.height == 0u)
+        return out;
     const std::uint32_t bpp = bpp_of(s.format), rb = row_bytes(s), end = surface_end(s);
     const std::uint32_t span_first = base + (rect.y * rect.stride + rect.x) * rect.bpp;
     const std::uint32_t span_last = base + ((rect.y + rect.height - 1u) * rect.stride + rect.x + rect.width) * rect.bpp;
-    if (span_last <= s.offset || span_first >= end) return out; // quick reject
+    if (span_last <= s.offset || span_first >= end)
+        return out; // quick reject
     for (std::uint32_t row = 0; row < rect.height; ++row) {
         const std::uint32_t start = base + ((rect.y + row) * rect.stride + rect.x) * rect.bpp;
         const std::uint32_t stop = start + rect.width * rect.bpp; // exclusive
-        if (stop <= s.offset || start >= end) continue;
+        if (stop <= s.offset || start >= end)
+            continue;
         const std::uint32_t from = std::max(start, s.offset) - s.offset, to = std::min(stop, end) - s.offset;
         const auto y0 = static_cast<int>(from / rb), y1 = static_cast<int>((to - 1u) / rb);
-        if (y0 == y1) out.add(static_cast<int>((from % rb) / bpp), y0, static_cast<int>(((to - 1u) % rb) / bpp), y1);
-        else out.add(0, y0, static_cast<int>(s.stride) - 1, y1);
+        if (y0 == y1)
+            out.add(static_cast<int>((from % rb) / bpp), y0, static_cast<int>(((to - 1u) % rb) / bpp), y1);
+        else
+            out.add(0, y0, static_cast<int>(s.stride) - 1, y1);
     }
     return out;
 }
 
 bool GeGl::reinterpret(Surface &into, const Surface &from, const Rect &hit) {
     const bool into_32 = into.format == 3u, from_32 = from.format == 3u;
-    if (into_32 == from_32 || row_bytes(into) != row_bytes(from) || hit.empty()) return false;
+    if (into_32 == from_32 || row_bytes(into) != row_bytes(from) || hit.empty())
+        return false;
     const auto delta = static_cast<int>(static_cast<std::int64_t>(into.offset) - static_cast<std::int64_t>(from.offset));
-    if (delta % 2 != 0) return false;
+    if (delta % 2 != 0)
+        return false;
     apply_pending_uploads(into);
     apply_pending_uploads(const_cast<Surface &>(from));
     resolve_alpha(const_cast<Surface &>(from), whole(from));
@@ -1095,8 +1317,8 @@ bool GeGl::reinterpret(Surface &into, const Surface &from, const Rect &hit) {
     into.alpha_bits = 0xFFu;
     ++passes_.reinterprets;
     if (frame_ == g_pass_frame)
-        std::cerr << "[pass] reinterpret into=0x" << std::hex << into.offset << "/f" << into.format << " from=0x" << from.offset << "/f" << from.format
-                  << std::dec << " " << hit.x0 << "," << hit.y0 << ".." << hit.x1 << "," << hit.y1 << "\n";
+        std::cerr << "[pass] reinterpret into=0x" << std::hex << into.offset << "/f" << into.format << " from=0x" << from.offset << "/f"
+                  << from.format << std::dec << " " << hit.x0 << "," << hit.y0 << ".." << hit.x1 << "," << hit.y1 << "\n";
     passes_.pixels += static_cast<std::uint64_t>((hit.x1 - hit.x0 + 1) * (hit.y1 - hit.y0 + 1) * scale_ * scale_);
     glBindFramebuffer(GL_FRAMEBUFFER, into.fbo);
     glDisable(GL_STENCIL_TEST);
@@ -1124,11 +1346,13 @@ bool GeGl::reinterpret(Surface &into, const Surface &from, const Rect &hit) {
 }
 
 void GeGl::alpha_will_change(Surface &s, const Rect &r) {
-    if (s.format == 0u) return; // RGB565 has neither alpha nor stencil
+    if (s.format == 0u)
+        return; // RGB565 has neither alpha nor stencil
     // Keep the two stale areas apart: settle the alpha first if they would touch.
     Rect grown = s.stencil_stale;
     grown.add(r);
-    if (grown.intersects(s.alpha_stale)) resolve_alpha(s, whole(s));
+    if (grown.intersects(s.alpha_stale))
+        resolve_alpha(s, whole(s));
     s.stencil_stale.add(r);
 }
 
@@ -1138,10 +1362,10 @@ void GeGl::resolve_alpha(Surface &s, const Rect &region, std::uint32_t bits) {
         return;
     }
     const Rect r = s.alpha_stale.clip(region);
-    if (r.empty()) return;
+    if (r.empty())
+        return;
     const bool complete = (bits & 0xFFu) == 0xFFu;
-    if (complete && r.x0 == s.alpha_stale.x0 && r.y0 == s.alpha_stale.y0 && r.x1 == s.alpha_stale.x1 &&
-        r.y1 == s.alpha_stale.y1)
+    if (complete && r.x0 == s.alpha_stale.x0 && r.y0 == s.alpha_stale.y0 && r.x1 == s.alpha_stale.x1 && r.y1 == s.alpha_stale.y1)
         s.alpha_stale = Rect{};
     if (s.stale_value >= 0) {
         // One known value throughout: a single clear sets it.
@@ -1165,8 +1389,8 @@ void GeGl::resolve_alpha(Surface &s, const Rect &region, std::uint32_t bits) {
     const std::uint32_t wanted = s.stencil_bits & bits;
     ++passes_.alpha_resolves;
     if (frame_ == g_pass_frame)
-        std::cerr << "[pass] alpha bits=0x" << std::hex << wanted << " vram=0x" << s.offset << std::dec << " " << r.x0 << ","
-                  << r.y0 << ".." << r.x1 << "," << r.y1 << "\n";
+        std::cerr << "[pass] alpha bits=0x" << std::hex << wanted << " vram=0x" << s.offset << std::dec << " " << r.x0 << "," << r.y0
+                  << ".." << r.x1 << "," << r.y1 << "\n";
     passes_.pixels += static_cast<std::uint64_t>(1 + std::popcount(wanted)) *
                       static_cast<std::uint64_t>((r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) * scale_ * scale_);
     glBindFramebuffer(GL_FRAMEBUFFER, s.fbo);
@@ -1187,7 +1411,8 @@ void GeGl::resolve_alpha(Surface &s, const Rect &region, std::uint32_t bits) {
     glUseProgram(alpha_program_);
     glBindVertexArray(present_vao_);
     for (GLuint bit = 0; bit < 8u; ++bit) {
-        if ((wanted & (1u << bit)) == 0u) continue;
+        if ((wanted & (1u << bit)) == 0u)
+            continue;
         glStencilFunc(GL_EQUAL, static_cast<GLint>(1u << bit), 1u << bit);
         glUniform1f(u_al_value_, static_cast<float>(1u << bit) / 255.0f);
         glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -1198,7 +1423,8 @@ void GeGl::resolve_alpha(Surface &s, const Rect &region, std::uint32_t bits) {
 void GeGl::resolve_stencil(Surface &s) {
     const Rect r = s.stencil_stale.clip(whole(s));
     s.stencil_stale = Rect{};
-    if (r.empty() || s.format == 0u) return;
+    if (r.empty() || s.format == 0u)
+        return;
     s.stencil_bits |= s.alpha_bits;
     ++passes_.stencil_resolves;
     if (frame_ == g_pass_frame)
@@ -1227,7 +1453,8 @@ void GeGl::resolve_stencil(Surface &s) {
     glBindSampler(0, samplers_[0]);
     glUniform1i(u_st_src_, 0);
     for (GLuint bit = 0; bit < 8u; ++bit) {
-        if ((s.alpha_bits & (1u << bit)) == 0u) continue;
+        if ((s.alpha_bits & (1u << bit)) == 0u)
+            continue;
         glStencilMask(1u << bit);
         glUniform1i(u_st_bit_, static_cast<GLint>(bit));
         glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -1238,24 +1465,31 @@ void GeGl::resolve_stencil(Surface &s) {
 
 void GeGl::sync_overlaps(Surface &s) {
     for (auto &other : surfaces_) {
-        if (&other == &s || !other.alive || other.content.empty() || other.last_draw == 0u) continue;
+        if (&other == &s || !other.alive || other.content.empty() || other.last_draw == 0u)
+            continue;
         auto synced = std::find_if(s.synced.begin(), s.synced.end(), [&](const auto &e) { return e.first == &other; });
-        if (synced != s.synced.end() && synced->second >= other.last_draw) continue;
+        if (synced != s.synced.end() && synced->second >= other.last_draw)
+            continue;
         const std::uint32_t bpp = bpp_of(other.format), rb = row_bytes(other);
         const std::uint32_t begin = other.offset + static_cast<std::uint32_t>(other.content.y0) * rb;
         const std::uint32_t end = other.offset + static_cast<std::uint32_t>(other.content.y1 + 1) * rb;
-        if (!(begin < surface_end(s) && s.offset < end)) continue;
-        const TransferRect drawn{0x04000000u + other.offset, other.stride, static_cast<std::uint32_t>(other.content.x0),
+        if (!(begin < surface_end(s) && s.offset < end))
+            continue;
+        const TransferRect drawn{0x04000000u + other.offset,
+                                 other.stride,
+                                 static_cast<std::uint32_t>(other.content.x0),
                                  static_cast<std::uint32_t>(other.content.y0),
                                  static_cast<std::uint32_t>(other.content.x1 - other.content.x0 + 1),
-                                 static_cast<std::uint32_t>(other.content.y1 - other.content.y0 + 1), bpp};
+                                 static_cast<std::uint32_t>(other.content.y1 - other.content.y0 + 1),
+                                 bpp};
         const Rect hit = overlap(s, drawn);
         if (synced == s.synced.end()) {
             s.synced.emplace_back(&other, 0u);
             synced = s.synced.end() - 1;
         }
         synced->second = other.last_draw;
-        if (hit.empty()) continue;
+        if (hit.empty())
+            continue;
         // Earlier batches are already drawn: surfaces are synced while applying state.
         if (!reinterpret(s, other, hit)) {
             download(other);
@@ -1266,23 +1500,28 @@ void GeGl::sync_overlaps(Surface &s) {
 }
 
 bool GeGl::batch_uses(const Surface &s) const {
-    if (batch_.empty() || !state_valid_) return false;
+    if (batch_.empty() || !state_valid_)
+        return false;
     int ox = 0, oy = 0;
-    if (s.stride == state_.fb_stride && s.format == state_.fb_format && locate(s, state_.fb_offset, ox, oy)) return true;
+    if (s.stride == state_.fb_stride && s.format == state_.fb_format && locate(s, state_.fb_offset, ox, oy))
+        return true;
     return state_.tex_from_target && locate(s, vram_offset(state_.tex_address), ox, oy);
 }
 
 bool GeGl::prepare_vram_read(std::uint32_t address, std::uint32_t bytes) {
     const std::uint32_t offset = vram_offset(address);
-    if (offset == kNotVram) return false;
+    if (offset == kNotVram)
+        return false;
     bool downloaded = false;
     for (auto &s : surfaces_) {
-        if (!s.alive || s.gpu_dirty.empty()) continue;
+        if (!s.alive || s.gpu_dirty.empty())
+            continue;
         const std::uint32_t rb = row_bytes(s);
         const std::uint32_t begin = s.offset + static_cast<std::uint32_t>(s.gpu_dirty.y0) * rb;
         const std::uint32_t end = s.offset + static_cast<std::uint32_t>(s.gpu_dirty.y1 + 1) * rb;
         if (offset < end && begin < offset + bytes) {
-            if (batch_uses(s)) flush();
+            if (batch_uses(s))
+                flush();
             download(s);
             downloaded = true;
         }
@@ -1731,6 +1970,210 @@ void GeGl::snapshot_destination(const Rect &region) {
     glActiveTexture(GL_TEXTURE0);
 }
 
+void GeGl::select_draw_program(bool compatibility) {
+    const bool wide = !compatibility && !coverage_safe_;
+    if (compatibility == compatibility_mode_ && wide == wide_mode_)
+        return;
+    compatibility_mode_ = compatibility;
+    wide_mode_ = wide;
+    program_ = compatibility ? compatibility_program_ : (wide ? wide_program_ : normal_program_);
+    vao_ = compatibility ? compatibility_vao_ : normal_vao_;
+    for (auto &binding : draw_locations_)
+        *binding.slot = compatibility ? binding.compatibility : (wide ? binding.wide : binding.normal);
+    reset_cache();
+}
+
+// Bypass metadata only when the entire GE plane error plus 1/16-texel
+// truncation stays inside the nearest tap's margin at every rectangle corner.
+// This is a sample-equivalence proof for integer 1:1 through rectangles.
+bool GeGl::nearest_rectangles_equivalent() const {
+    if (!state_.through || state_.mip_count || state_.min_linear || state_.mag_linear || indices_.size() % 6 != 0)
+        return false;
+    const double margin = .5 / scale_, texel_step = 1.0 / 16;
+    for (std::size_t i = 0; i < indices_.size(); i += 6) {
+        const auto &a = batch_[indices_[i]], &b = batch_[indices_[i + 1]], &c = batch_[indices_[i + 2]];
+        if (a.sprite_part != GlVertex::kSpriteFirst || b.sprite_part != GlVertex::kSpriteFirst || c.sprite_part != GlVertex::kSpriteFirst ||
+            batch_[indices_[i + 3]].sprite_part != GlVertex::kSpriteSecond)
+            return false;
+        const float width = b.x - a.x, height = c.y - a.y;
+        if (!std::isfinite(width) || !std::isfinite(height) || width == 0 || height == 0 || a.w != 1 || b.w != 1 || c.w != 1 || a.q != 1 ||
+            b.q != 1 || c.q != 1 || a.y != b.y || a.x != c.x || a.u != c.u || a.v != b.v || std::abs(b.u - a.u) != std::abs(width) ||
+            std::abs(c.v - a.v) != std::abs(height))
+            return false;
+        for (float f : {a.x, a.y, b.x, b.y, c.x, c.y, a.u, a.v, b.u, b.v, c.u, c.v})
+            if (!std::isfinite(f) || std::floor(f) != f || std::abs(f) > 65536)
+                return false;
+        const std::array<std::int64_t, 3> x{std::int64_t(a.x * 16), std::int64_t(b.x * 16), std::int64_t(c.x * 16)},
+            y{std::int64_t(a.y * 16), std::int64_t(b.y * 16), std::int64_t(c.y * 16)};
+        auto same_samples = [&](const std::array<float, 3> &values, bool horizontal) {
+            const auto p = ge_plane::Geometry(x, y, 0).shared(values);
+            const auto base = p.base;
+            const double unit = std::ldexp(1.0, p.exponent), direction = horizontal ? (b.u - a.u) / width : (c.v - a.v) / height;
+            double lo = 0, hi = 0;
+            for (double px : {double(std::min(a.x, b.x)) + margin, double(std::max(a.x, b.x)) - margin})
+                for (double py : {double(std::min(a.y, c.y)) + margin, double(std::max(a.y, c.y)) - margin}) {
+                    const double actual = (double(base) + double(p.dx) * px * 16 + double(p.dy) * py * 16) / 16384 * unit;
+                    const double ideal = values[0] + direction * (horizontal ? px - a.x : py - a.y);
+                    lo = std::min(lo, actual - ideal);
+                    hi = std::max(hi, actual - ideal);
+                }
+            return lo - unit - texel_step > -margin && hi + texel_step < margin;
+        };
+        if (!same_samples({a.u, b.u, c.u}, true) || !same_samples({a.v, b.v, c.v}, false))
+            return false;
+    }
+    return true;
+}
+
+// Records contain S/T/Q, gradient/flags, fog, and optional coverage vertices.
+// Keep batch_/indices_ intact: feedback and destination-blend grouping use the
+// original primitives even though the GPU stream is deindexed for record IDs.
+void GeGl::prepare_uv_planes() {
+    planes_compatible_ = true;
+    coverage_safe_ = true;
+    plane_words_.clear();
+    packed_vertices_.clear();
+    plane_indices_.clear();
+    if (!state_.texture || state_.clear)
+        return;
+    if (nearest_rectangles_equivalent() || std::all_of(batch_.begin(), batch_.end(), [](auto &v) { return v.lod_footprint >= 0; })) {
+        planes_compatible_ = false;
+        return;
+    }
+
+    int previous_rect = -1;
+    for (std::size_t i = 0; i + 2 < indices_.size(); i += 3) {
+        std::array<GlVertex, 3> v{batch_[indices_[i]], batch_[indices_[i + 1]], batch_[indices_[i + 2]]};
+        const bool line = v[0].lod_footprint >= 0, through = state_.through || line;
+        bool valid = true;
+        std::array<std::int64_t, 3> x, y;
+        std::array<float, 3> s, t, q;
+        for (unsigned k = 0; k < 3; ++k) {
+            if (!std::isfinite(v[k].x) || !std::isfinite(v[k].y) || std::abs(v[k].x) > 65536 || std::abs(v[k].y) > 65536 || !(v[k].w > 0) ||
+                !std::isfinite(v[k].w) || !std::isfinite(v[k].u) || !std::isfinite(v[k].v) || !std::isfinite(v[k].q)) {
+                valid = false;
+                break;
+            }
+            x[k] = std::int64_t(v[k].x * 16);
+            y[k] = std::int64_t(v[k].y * 16);
+            const float rw = through ? 1 : ge_math::reciprocal(v[k].w);
+            s[k] = through ? v[k].u : ge_math::product24(v[k].u / float(state_.tex_width), rw);
+            t[k] = through ? v[k].v : ge_math::product24(v[k].v / float(state_.tex_height), rw);
+            q[k] = through ? 1 : ge_math::product24(v[k].q, rw);
+            if (!std::isfinite(s[k]) || !std::isfinite(t[k]) || !std::isfinite(q[k]))
+                valid = false;
+        }
+        int record = -1;
+        if (valid) {
+            if (v[0].sprite_part == GlVertex::kSpriteSecond && previous_rect >= 0)
+                record = previous_rect;
+            else {
+                record = int(plane_words_.size());
+                const ge_plane::Geometry geometry(x, y, v[0].sprite_part == GlVertex::kSpriteFirst ? 0 : -1);
+                auto sp = geometry.shared(s), tp = geometry.shared(t), qp = geometry.shared(q);
+                for (auto p : {sp, tp, qp})
+                    plane_words_.push_back({unsigned(p.base), unsigned(p.dx), unsigned(p.dy), unsigned(p.exponent)});
+                const double gs = std::ldexp(double(std::max(std::abs(sp.dx), std::abs(sp.dy))) * 16 / 16384, sp.exponent),
+                             gt = std::ldexp(double(std::max(std::abs(tp.dx), std::abs(tp.dy))) * 16 / 16384, tp.exponent);
+                const float grad = line ? v[0].lod_footprint
+                                        : float(std::max(gs * (through ? 1 : state_.tex_width), gt * (through ? 1 : state_.tex_height)));
+                const bool needs_coverage = !through && !line && (qp.dx != 0 || qp.dy != 0) && state_.lod_mode != 1 &&
+                                            (state_.mip_count != 0 || state_.min_linear != state_.mag_linear);
+                plane_words_.push_back({std::bit_cast<unsigned>(grad),
+                                        (through ? 1u : 0u) | (line ? 2u : 0u) | (v[0].sprite_part == GlVertex::kSpriteFirst ? 4u : 0u) |
+                                            (qp.right && v[0].sprite_part != GlVertex::kSpriteFirst ? 8u : 0u) |
+                                            (needs_coverage ? 32u : 0u),
+                                        line ? std::bit_cast<unsigned>(v[0].u) : 0u, line ? std::bit_cast<unsigned>(v[0].v) : 0u});
+                auto fp = geometry.fixed({std::int64_t(v[0].fog), std::int64_t(v[1].fog), std::int64_t(v[2].fog)});
+                plane_words_.push_back({unsigned(fp.base), unsigned(fp.dx), unsigned(fp.dy), 0});
+                if (needs_coverage) {
+                    const bool clockwise = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]) >= 0;
+                    unsigned b = clockwise ? 1 : 2, c = clockwise ? 2 : 1;
+                    plane_words_.push_back({unsigned(x[0]), unsigned(y[0]), unsigned(x[b]), unsigned(y[b])});
+                    plane_words_.push_back({unsigned(x[c]), unsigned(y[c]), 0, 0});
+                    if (v[0].sprite_part != GlVertex::kSpriteFirst) {
+                        const auto xmin = std::min({x[0], x[1], x[2]}) - 64, xmax = std::max({x[0], x[1], x[2]}) + 64;
+                        const auto ymin = std::min({y[0], y[1], y[2]}) - 16, ymax = std::max({y[0], y[1], y[2]}) + 16;
+                        for (unsigned j = 0; j < 3; ++j)
+                            for (auto px : {xmin, xmax})
+                                for (auto py : {ymin, ymax}) {
+                                    unsigned k = (j + 1) % 3;
+                                    auto cross = (x[k] - x[j]) * (py - y[j]) - (y[k] - y[j]) * (px - x[j]);
+                                    if (cross < -std::int64_t(2147483647) || cross > 2147483647)
+                                        coverage_safe_ = false;
+                                }
+                    }
+                }
+                if (v[0].sprite_part == GlVertex::kSpriteFirst)
+                    previous_rect = record;
+                else
+                    previous_rect = -1;
+            }
+        } else {
+            planes_compatible_ = false;
+            plane_words_.clear();
+            packed_vertices_.clear();
+            plane_indices_.clear();
+            return;
+        }
+        for (auto point : v) {
+            if (record >= 0)
+                point.fog = -1.0f - float(record);
+            packed_vertices_.push_back({point.x, point.y, point.z, point.r, point.g, point.b, point.a,
+                                        point.sr, point.sg, point.sb, 0, point.fog});
+            plane_indices_.push_back(unsigned(plane_indices_.size()));
+        }
+    }
+    if (plane_words_.empty()) {
+        plane_words_.clear();
+        packed_vertices_.clear();
+        plane_indices_.clear();
+        return;
+    }
+    const auto rows = (plane_words_.size() + 63) / 64;
+    if (rows > 2048) {
+        planes_compatible_ = false;
+        plane_words_.clear();
+        packed_vertices_.clear();
+        plane_indices_.clear();
+        return;
+    }
+    plane_words_.resize(rows * 64);
+}
+
+// Append until full, then rotate. GL command order protects previous draws
+// when an atlas is reused; no framebuffer download or guest CPU fallback.
+void GeGl::upload_uv_planes() {
+    if (plane_words_.empty())
+        return;
+    const unsigned rows = unsigned(plane_words_.size() / 64);
+    if (plane_atlas_row_ + rows > 2048) {
+        ++plane_counters_.atlas_rollovers;
+        plane_atlas_index_ = (plane_atlas_index_ + 1) % 3;
+        plane_atlas_row_ = 0;
+    }
+    plane_texture_ = plane_atlases_[plane_atlas_index_];
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, plane_texture_);
+    glBindSampler(2, 0);
+    if (!plane_atlas_allocated_[plane_atlas_index_]) {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, 64, 2048, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, nullptr);
+        plane_atlas_allocated_[plane_atlas_index_] = true;
+    }
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, GLint(plane_atlas_row_), 64, GLsizei(rows), GL_RGBA_INTEGER, GL_UNSIGNED_INT, plane_words_.data());
+    plane_counters_.upload_bytes += plane_words_.size() * sizeof(plane_words_[0]);
+    const float offset = float(plane_atlas_row_ * 64);
+    for (auto &v : packed_vertices_)
+        if (v.fog < 0)
+            v.fog -= offset;
+    plane_atlas_row_ += rows;
+    glUniform1i(u_planes_, 2);
+    glActiveTexture(GL_TEXTURE0);
+}
+
 void GeGl::flush() {
     if (batch_.empty() || indices_.empty() || !state_valid_) {
         batch_.clear();
@@ -1749,7 +2192,11 @@ void GeGl::flush() {
     const bool has_secondary = std::any_of(batch_.begin(), batch_.end(), [](const GlVertex &v) {
         return v.sr != 0u || v.sg != 0u || v.sb != 0u;
     });
+    prepare_uv_planes();
+    select_draw_program(!planes_compatible_);
+    if(compatibility_mode_)++plane_counters_.interpolated;else if(wide_mode_)++plane_counters_.wide;else ++plane_counters_.fast;
     apply_state(has_secondary);
+    if(!compatibility_mode_)upload_uv_planes();
     auto mark_group = [&](const Rect &drawn) {
         if (current_ == nullptr || drawn.empty()) return;
         mark_drawn(*current_, drawn);
@@ -1772,10 +2219,22 @@ void GeGl::flush() {
     // still be reading makes mobile drivers stall or copy it, and some browsers
     // re-validate a whole index buffer after any change to it.
     glBindBuffer(GL_ARRAY_BUFFER, vbo_);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(batch_.size() * sizeof(GlVertex)), batch_.data(), GL_STREAM_DRAW);
+    if (compatibility_mode_) {
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(batch_.size() * sizeof(GlVertex)), batch_.data(), GL_STREAM_DRAW);
+    } else {
+        // Textured primitives were packed while preparing their records. Other
+        // primitives retain the original indexing and need one packing pass.
+        if (packed_vertices_.empty()) {
+            packed_vertices_.reserve(batch_.size());
+            for (const auto &v : batch_)
+                packed_vertices_.push_back({v.x, v.y, v.z, v.r, v.g, v.b, v.a, v.sr, v.sg, v.sb, 0, v.fog});
+        }
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(packed_vertices_.size() * sizeof(PlaneVertex)),
+                     packed_vertices_.data(), GL_STREAM_DRAW);
+    }
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, index_buffers_[next_index_buffer_]); // vao_ is bound by apply_state
     next_index_buffer_ = (next_index_buffer_ + 1u) % index_buffers_.size();
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indices_.size() * sizeof(std::uint32_t)), indices_.data(),
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indices_.size() * sizeof(std::uint32_t)), plane_indices_.empty()?indices_.data():plane_indices_.data(),
                  GL_STREAM_DRAW);
     const bool shader_blend = state_.blend && !state_.clear;
     const bool reads_destination = shader_blend && blend_reads_destination();
@@ -1933,6 +2392,9 @@ void GeGl::present(std::uint32_t fb_address, std::uint32_t stride, std::uint32_t
 }
 
 void GeGl::report_targets() const {
+    std::cerr << "[gl-planes] fast=" << plane_counters_.fast << " wide=" << plane_counters_.wide
+              << " interpolated=" << plane_counters_.interpolated << " rollovers=" << plane_counters_.atlas_rollovers
+              << " uploaded=" << plane_counters_.upload_bytes << "\n";
     for (const auto &s : surfaces_) {
         if (!s.alive) continue;
         std::cerr << "[gl-surface] vram=0x" << std::hex << s.offset << std::dec << " " << s.stride << "x" << s.height

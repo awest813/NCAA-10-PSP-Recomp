@@ -33,11 +33,14 @@ struct GlVertex {
     float x, y, z, w;   // drawing-space pixels, depth 0..65535, clip w
     float u, v;         // texels
     std::uint8_t r, g, b, a;
-    std::uint8_t sr{}, sg{}, sb{}, padding{};
+    std::uint8_t sr{}, sg{}, sb{}, sprite_part{};
+    static constexpr std::uint8_t kSpriteFirst = 1, kSpriteSecond = 2;
     float q{1.0f};
     float fog{255.0f};
     float lod_footprint{-1.0f}; // line-cell derivatives; negative uses ordinary triangle derivatives
 };
+
+static_assert(sizeof(GlVertex) == 44);
 
 // A rectangle copied by a GE block transfer.
 struct TransferRect {
@@ -64,6 +67,7 @@ struct GlDrawState {
     bool fog{};
     std::uint32_t fog_color{};
     bool texture{};
+    bool through{};
     std::uint32_t tex_func{};
     bool tex_alpha{}, tex_double{};
     std::uint32_t env{};
@@ -239,7 +243,7 @@ private:
     void build_blend_groups();
     void snapshot_destination(const Rect &region);
     [[nodiscard]] bool blend_reads_destination() const;
-    void resolve_stencil(Surface &s);                    // colour alpha -> stencil where it is stale
+    void resolve_stencil(Surface &s); // colour alpha -> stencil where it is stale
     // Call before colour alpha in `r` is overwritten from VRAM or another surface.
     void alpha_will_change(Surface &s, const Rect &r);
     bool batch_writes_stencil_{};
@@ -247,6 +251,42 @@ private:
     GLsizei scratch_width_{}, scratch_height_{};
     GLint u_tex_format_{};
     void apply_state(bool has_secondary);
+    // Texture coordinates are evaluated from a primitive record, so only these
+    // drawing-space attributes need vertex transport.
+    struct PlaneVertex {
+        float x, y, z;
+        std::uint8_t r, g, b, a, sr, sg, sb, padding;
+        float fog;
+    };
+    static_assert(sizeof(PlaneVertex) == 24);
+    struct DrawLocation {
+        GLint *slot;
+        GLint normal, wide, compatibility;
+    };
+    std::vector<DrawLocation> draw_locations_;
+    std::vector<PlaneVertex> packed_vertices_;
+    GLuint normal_program_{}, wide_program_{}, compatibility_program_{}, normal_vao_{}, compatibility_vao_{};
+    bool compatibility_mode_{}, planes_compatible_{true}, wide_mode_{}, coverage_safe_{true};
+    // Cumulative metadata diagnostics; framebuffer downloads are counted separately.
+public:
+    struct PlaneCounters {
+        std::uint64_t fast{}, wide{}, interpolated{}, atlas_rollovers{}, upload_bytes{};
+    };
+    [[nodiscard]] const PlaneCounters &planes() const noexcept { return plane_counters_; }
+
+private:
+    PlaneCounters plane_counters_{};
+    void select_draw_program(bool compatibility);
+    void upload_uv_planes();
+    bool nearest_rectangles_equivalent() const;
+    void prepare_uv_planes();
+    GLuint plane_texture_{}, reciprocal_texture_{};
+    std::array<GLuint, 3> plane_atlases_{};
+    std::array<bool, 3> plane_atlas_allocated_{};
+    unsigned plane_atlas_index_{}, plane_atlas_row_{};
+    GLint u_planes_{}, u_reciprocal_{};
+    std::vector<std::array<std::uint32_t, 4>> plane_words_;
+    std::vector<std::uint32_t> plane_indices_;
     // glBlitFramebuffer with the scissor test off and all colour channels on.
     void blit(GLuint from, const GLint src[4], GLuint to, const GLint dst[4], GLbitfield mask);
 

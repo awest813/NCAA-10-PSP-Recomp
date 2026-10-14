@@ -1231,3 +1231,5 @@ underruns during loading and early gameplay; audible accuracy and underrun
 recovery still need work. Sustained full-match compatibility, rendering
 comparison against a PSP reference, performance under heavier scenes, native
 input/audio behavior, and measured presentation pacing remain open work.
+
+The 2026-10-14 fixed-plane checkpoint adds measured GPU UV/fog setup, shared rectangle planes, fragment arithmetic and four-pixel span LOD. Full SDSU/GT replay RGB MAE is 0.008749 / 0.013225 against pinned `61e60ee6ff`; five early SDSU cases and prefix-40 raw RGB match exactly. Eleven native suites include GPU arithmetic/metadata-lifetime tests. Current package: `build/static-ncaa10-fixed-planes-final`. See [handoff](../HANDOFF.md#fixed-point-uvfog-planes-and-span-lod-checkpoint-2026-10-14) for performance and remaining coverage; this is not a new full-match/audio/controller verification.
