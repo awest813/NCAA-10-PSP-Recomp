@@ -726,8 +726,9 @@ bool GeGl::init() {
     glUniform1i(u_planes_, 2);
     glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D, plane_texture_);
-    const std::array<unsigned, 4> zero{};
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, 1, 1, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, zero.data());
+    // Immutable storage avoids reallocating/revalidating the atlas on updates.
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32UI, 64, 2048);
+    plane_atlas_allocated_[0] = true;
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glGenTextures(1, &reciprocal_texture_);
@@ -2031,6 +2032,7 @@ bool GeGl::nearest_rectangles_equivalent() const {
 void GeGl::prepare_uv_planes() {
     planes_compatible_ = true;
     coverage_safe_ = true;
+    plane_word_count_ = 0;
     plane_words_.clear();
     packed_vertices_.clear();
     plane_indices_.clear();
@@ -2138,6 +2140,7 @@ void GeGl::prepare_uv_planes() {
         plane_indices_.clear();
         return;
     }
+    plane_word_count_ = unsigned(plane_words_.size());
     plane_words_.resize(rows * 64);
 }
 
@@ -2154,23 +2157,33 @@ void GeGl::upload_uv_planes() {
     }
     plane_texture_ = plane_atlases_[plane_atlas_index_];
     glActiveTexture(GL_TEXTURE2);
-    glBindTexture(GL_TEXTURE_2D, plane_texture_);
-    glBindSampler(2, 0);
+    if (cache_.plane_texture != plane_texture_) {
+        glBindTexture(GL_TEXTURE_2D, plane_texture_);
+        cache_.plane_texture = plane_texture_;
+    }
+    if (cache_.plane_sampler != 0) {
+        glBindSampler(2, 0);
+        cache_.plane_sampler = 0;
+    }
     if (!plane_atlas_allocated_[plane_atlas_index_]) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32UI, 64, 2048, 0, GL_RGBA_INTEGER, GL_UNSIGNED_INT, nullptr);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA32UI, 64, 2048);
         plane_atlas_allocated_[plane_atlas_index_] = true;
     }
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, GLint(plane_atlas_row_), 64, GLsizei(rows), GL_RGBA_INTEGER, GL_UNSIGNED_INT, plane_words_.data());
-    plane_counters_.upload_bytes += plane_words_.size() * sizeof(plane_words_[0]);
+    // Preserve the 64-cell record addressing grid, but avoid uploading unused
+    // padding on the common single-row batch. Multi-row batches stay one call.
+    const unsigned upload_width = rows == 1 ? plane_word_count_ : 64;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, GLint(plane_atlas_row_), GLsizei(upload_width), GLsizei(rows), GL_RGBA_INTEGER, GL_UNSIGNED_INT,
+                    plane_words_.data());
+    plane_counters_.upload_bytes += std::size_t(upload_width) * rows * sizeof(plane_words_[0]);
     const float offset = float(plane_atlas_row_ * 64);
     for (auto &v : packed_vertices_)
         if (v.fog < 0)
             v.fog -= offset;
     plane_atlas_row_ += rows;
-    glUniform1i(u_planes_, 2);
+    // Sampler units are assigned once for each program in init().
     glActiveTexture(GL_TEXTURE0);
 }
 

@@ -165,17 +165,24 @@ void atlas_lifetime() {
     state.tex_width = 7; state.tex_height = 1; state.texels = palette.data();
     state.texture_identity = palette.data(); state.texture_hash = 1;
     const auto downloads = gl.downloads();
+    std::uint64_t expected_upload_bytes = 0;
     for (unsigned i = 0; i < 6145; ++i) {
         state.env = i; gl.set_state(state);
         const float x = float(i % 64), y = float(i / 64), u = float(i % 7) + .5f;
         const pspweb::GlVertex a{x, y, 0, 1, u, .5f, 255, 255, 255, 255},
             b{x + 1, y, 0, 1, u, .5f, 255, 255, 255, 255}, c{x, y + 1, 0, 1, u, .5f, 255, 255, 255, 255},
             d{x + 1, y + 1, 0, 1, u, .5f, 255, 255, 255, 255};
-        gl.triangle(a, b, c); gl.triangle(b, d, c);
+        // Mix a partial row with a two-row record batch, including after atlas
+        // reuse. Unused texels may contain old data and must never be sampled.
+        const unsigned copies = i % 31 == 0 ? 8 : 1;
+        for (unsigned j = 0; j < copies; ++j) {
+            gl.triangle(a, b, c); gl.triangle(b, d, c);
+        }
+        expected_upload_bytes += (copies == 8 ? 128u : 10u) * sizeof(Word);
     }
     gl.flush();
     assert(gl.downloads() == downloads && gl.planes().atlas_rollovers >= 3);
-    assert(gl.planes().upload_bytes >= 6145u * 64u * sizeof(Word));
+    assert(gl.planes().upload_bytes == expected_upload_bytes);
     gl.prepare_vram_read(0x04000000, 64 * 128 * 4);
     for (unsigned i = 0; i < 6145; ++i) assert((memory.load32(0x04000000 + i * 4) & 0xFFFFFF) == (palette[i % 7] & 0xFFFFFF));
     assert(glGetError() == GL_NO_ERROR);

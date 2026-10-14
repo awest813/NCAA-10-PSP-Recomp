@@ -283,7 +283,7 @@ private:
     GLuint plane_texture_{}, reciprocal_texture_{};
     std::array<GLuint, 3> plane_atlases_{};
     std::array<bool, 3> plane_atlas_allocated_{};
-    unsigned plane_atlas_index_{}, plane_atlas_row_{};
+    unsigned plane_atlas_index_{}, plane_atlas_row_{}, plane_word_count_{};
     GLint u_planes_{}, u_reciprocal_{};
     std::vector<std::array<std::uint32_t, 4>> plane_words_;
     std::vector<std::uint32_t> plane_indices_;
@@ -292,7 +292,8 @@ private:
 
     // Cached GL state: skips redundant calls, which are costly through WebGL.
     struct Cache {
-        GLuint program{~0u}, vao{~0u}, fbo{~0u}, texture{~0u}, sampler{~0u};
+        GLuint program{~0u}, vao{~0u}, fbo{~0u}, texture{~0u}, sampler{~0u}, plane_texture{~0u};
+        int plane_sampler{-1};
         GLint viewport_w{-1}, viewport_h{-1};
         GLint scissor[4]{-1, -1, -1, -1};
         int scissor_test{-1}, depth_test{-1}, blend{-1}, stencil_test{-1};

@@ -32,6 +32,7 @@ jobs:
         run: |
           python scripts/test_source_workflow.py
           python scripts/test_static_package.py
+          python scripts/test_ge_replay_benchmark.py
           node scripts/test_web_audio.mjs
           node scripts/test_web_osk.mjs
           node scripts/test_web_input.mjs

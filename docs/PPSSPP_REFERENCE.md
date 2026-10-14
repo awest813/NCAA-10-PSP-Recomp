@@ -1,5 +1,10 @@
 # PPSSPP reference evidence
 
+## Replay performance follow-up (2026-10-14)
+
+The post-`fbc80e7` atlas optimization preserves all fourteen captured framebuffers exactly, so the pinned-reference accuracy results below are unchanged. Metadata transfer falls 74–76%; corrected native replay improves GT median 2.61%, while SDSU median is essentially flat (+0.24%) and its tail worsens. The new public native replay/ABBA tools remove per-record option-query overhead and record warmup/EGL completion; old absolute timings are historical. See [the performance method and evidence](GE_REPLAY_PERFORMANCE.md). This is not browser FPS or a new physical PSP accuracy measurement.
+
+
 ## Fixed-point UV/fog planes and span LOD checkpoint (2026-10-14)
 
 Following `4caa0ba`, the first incorrect SDSU pixel was traced to UV interpolation: V **42.749122 → 42.750652** crosses a mip-2 bilinear weight. Production now independently implements the measured setup reciprocal, shared 15-bit S/T/Q values, 14-fraction-bit gradients, GE anchor selection, fragment reciprocal/product and 1/16-texel tap coordinates. Rectangles share their first virtual-corner plane and retain endpoint clip W. Fog uses an integer plane. LOD subtracts separately quantized GE log values and samples Q at the appropriate covered pixel in each four-pixel span. Arithmetic and setup coefficients are independent implementations/factual reference-output observations, not copied GPL source.
