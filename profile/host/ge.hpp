@@ -116,6 +116,8 @@ private:
         bool z_test{}, z_write{};
         bool clear{};
         std::uint32_t clear_flags{};
+        bool dither{};
+        std::array<std::uint32_t, 4> dither_rows{};
         bool texture{}, tex_alpha{}, tex_double{};
         std::uint32_t tex_func{};
         float env[3]{};

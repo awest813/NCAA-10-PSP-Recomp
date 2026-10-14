@@ -727,6 +727,75 @@ void doubled_destination_alpha(bool use_gl) {
     }
 }
 
+void ordered_dither(bool use_gl) {
+    std::cout << "Ordered dither tests: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    const std::array<std::array<unsigned, 4>, 2> matrices = {{{0x1D0C, 0xF3E2, 0x0C1D, 0xE2F3},
+                                                               {0x789F, 0, 0xFFFF, 0x8888}}};
+    const std::array<float, 6> data = {0, 0, 0, 64, 64, 0};
+    for (unsigned i = 0; i < data.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(data[i]));
+    for (int scale : {1, 2}) {
+        if (!use_gl && scale != 1) continue;
+        if (use_gl) assert(gl.set_render_scale(scale) == scale);
+        for (const auto &rows : matrices)
+        for (unsigned format : {0u, 1u, 2u, 3u})
+        for (unsigned offset : {0u, 64u * (format == 3 ? 4u : 2u)})
+        for (unsigned color : {0x786860u, 0u, 0xFFFFFFu})
+        for (bool clear : {false, true})
+        for (bool enabled : {true, false}) {
+            DisplayList dl(memory);
+            dl.command(0x9C, offset); dl.command(0x9D, 64); dl.command(0xD2, format);
+            dl.command(0xD4, 0); dl.command(0xD5, 63 | (63 << 10));
+            dl.command(0x12, (3u << 7u) | (1u << 23));
+            dl.command(0x55, color); dl.command(0x58, 255); dl.command(0xD3, clear ? 0x101 : 0);
+            dl.command(0x20, enabled ? 1 : 0);
+            for (unsigned i = 0; i < rows.size(); ++i) dl.command(0xE2 + i, rows[i]);
+            dl.draw(6, 2); dl.run(ge);
+            if (use_gl) { gl.flush(); gl.prepare_vram_read(0x04000000 + offset, 64 * 64 * (format == 3 ? 4 : 2)); }
+            for (unsigned y = 0; y < 4; ++y) for (unsigned x = 0; x < 4; ++x) {
+                const int nibble = (rows[y] >> (x * 4)) & 15;
+                const int delta = enabled ? (nibble ^ 8) - 8 : 0;
+                std::array<unsigned, 3> c{};
+                for (unsigned k = 0; k < 3; ++k)
+                    c[k] = static_cast<unsigned>(std::clamp(static_cast<int>((color >> (k * 8)) & 255) + delta, 0, 255));
+                const unsigned address = 0x04000000 + offset + ((32 + y) * 64 + 32 + x) * (format == 3 ? 4 : 2);
+                unsigned expected, actual;
+                if (format == 3) { expected = c[0] | (c[1] << 8) | (c[2] << 16); actual = memory.load32(address) & 0xFFFFFF; }
+                else {
+                    expected = format == 0 ? (c[0] >> 3) | ((c[1] >> 2) << 5) | ((c[2] >> 3) << 11)
+                             : format == 1 ? (c[0] >> 3) | ((c[1] >> 3) << 5) | ((c[2] >> 3) << 10)
+                                           : (c[0] >> 4) | ((c[1] >> 4) << 4) | ((c[2] >> 4) << 8);
+                    actual = memory.load16(address) & (format == 0 ? 0xFFFF : format == 1 ? 0x7FFF : 0xFFF);
+                }
+                if (actual != expected) std::cerr << "dither: expected 0x" << std::hex << expected << ", got 0x" << actual << std::dec << '\n';
+                assert(actual == expected);
+            }
+            if (use_gl) assert(glGetError() == GL_NO_ERROR);
+        }
+    }
+    if (!use_gl) {
+        auto blended = [&](unsigned src, unsigned dst, unsigned equation, unsigned expected, unsigned address) {
+            DisplayList clear(memory);
+            clear.command(0x9C, 0); clear.command(0xD2, 3); clear.command(0x20, 0);
+            clear.command(0xD3, 0x101); clear.command(0x55, dst); clear.draw(6, 2); clear.run(ge);
+            DisplayList blend(memory);
+            blend.command(0xD3, 0); blend.command(0x20, 1); blend.command(0x21, 1);
+            blend.command(0x55, src); blend.command(0xDF, (equation << 8) | 0xAA);
+            blend.command(0xE0, 0xFFFFFF); blend.command(0xE1, 0xFFFFFF);
+            for (unsigned i = 0; i < 4; ++i) blend.command(0xE2 + i, matrices[0][i]);
+            blend.draw(6, 2); blend.run(ge);
+            expect_pixel(memory, nullptr, expected, 0, address);
+        };
+        // Dither precedes saturation, rather than adjusting already-clamped RGB.
+        blended(0x0A0A0A, 0xFAFAFA, 0, 0xFFFFFF, sample);
+        blended(0x040404, 0x0A0A0A, 1, 0, sample + 64 * 4 + 2 * 4);
+    }
+}
+
 void texture_mipmaps() {
     std::cout << "Texture mipmap tests: GLES3" << std::endl;
     psprecomp::GuestMemory memory;
@@ -1023,6 +1092,7 @@ int main() {
     integer_depth(false);
     doubled_destination_alpha(false);
     render_target_precision(false);
+    ordered_dither(false);
     GlContext context;
     lighting_colors(true);
     lighting_components(true);
@@ -1031,6 +1101,7 @@ int main() {
     integer_depth(true);
     doubled_destination_alpha(true);
     render_target_precision(true);
+    ordered_dither(true);
     texture_filters();
     texture_mipmaps();
     mipmap_clut_and_vram();

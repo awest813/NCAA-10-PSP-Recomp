@@ -48,6 +48,8 @@ Paths are relative to the repository root containing `scripts` and `profile`. Ex
 
 ## Preparing a useful patch or report
 
+**Test dithering across pipeline modes.** Ordered dither changes RGB before saturation and framebuffer conversion; clear mode and 8888 can also expose it. Check all signed nibble values, matrix-only changes, surface origins and internal resolution scaling. Blended output needs dithering after blending; a source-color offset does not implement that order. Preserve saturation-boundary fixtures so an early clamp cannot hide the difference.
+
 **Treat a mip chain as one cache resource.** Include each level's layout and content in cache identity/revalidation, count all decoded texels toward capacity, and keep pending draws from observing mutated data. Test a higher-level-only RAM update and a same-frame VRAM write while the base hash remains unchanged. Use distinct level colors and per-level indexed palettes to reveal incorrect selection and CLUT sharing. Explicit texel fetch still needs an appropriate sampler and backed mip chain on the tested GLES path.
 
 **Keep LOD in guest pixel units.** Host resolution scaling must not silently shift the selected mip. Check automatic derivatives, signed constant bias, slope with varying clip w, nearest-level rounding and interpolation fractions separately. Compare the same captured frame after the change; unchanged draw counts alone do not establish unchanged GPU cost or full browser FPS.

@@ -1226,11 +1226,13 @@ void Ge::shade_pixel(int x, int y, float z, float u, float v, float r, float g, 
         fb[1] = static_cast<std::uint8_t>(packed >> 8u);
     };
 
+    const unsigned nibble = (p.dither_rows[static_cast<unsigned>(y) & 3u] >> ((static_cast<unsigned>(x) & 3u) * 4u)) & 15u;
+    const int dither = p.dither ? static_cast<int>(nibble ^ 8u) - 8 : 0;
     if (p.clear) {
         const std::uint32_t old = load_fb();
         std::uint32_t value = old;
-        const std::uint32_t src = pack(static_cast<std::uint32_t>(clamp255(r)), static_cast<std::uint32_t>(clamp255(g)),
-                                       static_cast<std::uint32_t>(clamp255(b)), static_cast<std::uint32_t>(clamp255(a)));
+        const std::uint32_t src = pack(static_cast<std::uint32_t>(clamp255(r + dither)), static_cast<std::uint32_t>(clamp255(g + dither)),
+                                       static_cast<std::uint32_t>(clamp255(b + dither)), static_cast<std::uint32_t>(clamp255(a)));
         if ((p.clear_flags & 0x100u) != 0u) value = (value & 0xFF000000u) | (src & 0x00FFFFFFu);
         if ((p.clear_flags & 0x200u) != 0u) value = (value & 0x00FFFFFFu) | (src & 0xFF000000u);
         store_fb(value, old);
@@ -1317,10 +1319,13 @@ void Ge::shade_pixel(int x, int y, float z, float u, float v, float r, float g, 
             case 4: result = std::max(color[k], dst[k]); break;
             default: result = std::fabs(color[k] - dst[k]); break;
             }
-            color[k] = clamp255(result);
+            color[k] = result;
         }
     }
 
+    // Dither the final RGB before saturation and packing; stencil/alpha is
+    // independent. Keeping blend results unclamped above preserves this order.
+    for (unsigned k = 0; k < 3; ++k) color[k] = clamp255(color[k] + dither);
     store_fb(pack(static_cast<std::uint32_t>(color[0]), static_cast<std::uint32_t>(color[1]),
                   static_cast<std::uint32_t>(color[2]), static_cast<std::uint32_t>(color[3])),
              old);
@@ -1550,6 +1555,8 @@ void Ge::prepare_pixel_state() {
     p.z_write = p.z_test && (regs_[kZWriteDisable] & 1u) == 0u;
     p.clear = (regs_[kClearMode] & 1u) != 0u;
     p.clear_flags = regs_[kClearMode];
+    p.dither = (regs_[0x20] & 1u) != 0u;
+    for (unsigned i = 0; i < 4; ++i) p.dither_rows[i] = regs_[0xE2 + i] & 0xFFFFu;
     p.texture = (regs_[kTextureEnable] & 1u) != 0u;
     p.tex_func = regs_[kTexFunc] & 7u;
     p.tex_alpha = (regs_[kTexFunc] & 0x100u) != 0u;
@@ -1777,6 +1784,8 @@ void Ge::submit_gl_state() {
     st.sy2 = p.sy2;
     st.clear = p.clear;
     st.clear_flags = p.clear ? (p.clear_flags & 0x700u) : 0u;
+    st.dither = p.dither;
+    st.dither_rows = p.dither_rows;
     if (!p.clear) {
         st.z_test = p.z_test;
         st.z_write = p.z_write;

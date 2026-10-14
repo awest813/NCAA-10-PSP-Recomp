@@ -46,6 +46,8 @@ struct GlDrawState {
     int sx1{}, sy1{}, sx2{}, sy2{};
     bool clear{};
     std::uint32_t clear_flags{};
+    bool dither{};
+    std::array<std::uint32_t, 4> dither_rows{};
     bool z_test{}, z_write{};
     std::uint32_t z_func{};
     bool blend{};
@@ -253,6 +255,8 @@ private:
         float blend_color[4]{-1, -1, -1, -1};
         float uniforms[32][4];
         bool uniform_valid[32]{};
+        bool dither_rows_valid{};
+        std::array<std::uint32_t, 4> dither_rows{};
     };
     void reset_cache() { cache_ = Cache{}; }
     void use_program(GLuint program);
@@ -277,6 +281,7 @@ private:
     GLint u_output_format_{}, u_blend_alpha_to_rgb_{}, u_src_scale_{}, u_clear_{}, u_tex_window_{}, u_tex_clamp_{};
     GLint u_fog_enable_{}, u_fog_color_{};
     GLint u_lod_params_{}, u_lod_limits_{}, u_lod_filter_{};
+    GLint u_dither_{}, u_dither_rows_{};
     GLint u_present_tex_{}, u_present_rect_{}, u_present_origin_{};
     GLuint reinterpret_program_{};
     GLint u_ri_src_{}, u_ri_mode_{}, u_ri_format_{}, u_ri_delta_{}, u_ri_row_bytes_{}, u_ri_src_size_{};

@@ -1,8 +1,8 @@
 # NCAA remaining gaps and acceptance checks
 
-Updated 2026-10-13. Target: NCAA Football 10 PSP US, ULUS10440, AOT C++/WebAssembly. Default guest RAM is 64 MiB, with a 56 MiB user partition. This checklist tracks evidence, not a promise of full compatibility.
+Updated 2026-10-14. Target: NCAA Football 10 PSP US, ULUS10440, AOT C++/WebAssembly. Default guest RAM is 64 MiB, with a 56 MiB user partition. This checklist tracks evidence, not a promise of full compatibility.
 
-Latest rendering evidence: regular mip chains now reach GLES/WebGL with automatic/constant/slope LOD, signed bias, four-bit filtering, per-level content revalidation and indexed palette handling. Direct software-reference RGB MAE improves to 4.6312 for SDSU and 5.0452 for Georgia Tech-Georgia; neither frame is exact. Tests cover all eight levels, perspective slope, 2x scale and higher-level RAM/VRAM changes. The software diagnostic rasterizer still samples level zero; irregular chains, hardware precision, residual shading and broader blending remain open. Latest package build/static-ncaa10-mipmaps passes web/package/native checks. No browser is exposed to automation for fresh gameplay/FPS testing. See [reference evidence](PPSSPP_REFERENCE.md) for methods and limits.
+Latest rendering evidence: regular mip chains and ordered dithering now have synthetic display-list coverage. Dither works in software and GLES unblended/clear paths, including 8888, signed matrix limits, target offsets and 2x scaling. Direct software-reference RGB MAE is 4.3781 for SDSU and 4.7421 for Georgia Tech-Georgia; residual shading remains. Hardware-window metrics are mixed. GLES post-blend dithering/packing, alpha/stencil precision and complete hardware agreement remain open. Latest package `build/static-ncaa10-dither` passes web/package/native checks. Browser connector inventory was empty, and native Chrome app approval timed out before navigation; live gameplay/FPS verification remains pending. See [reference evidence](PPSSPP_REFERENCE.md).
 
 | Work | Current evidence | Required next result |
 | --- | --- | --- |

@@ -1,6 +1,6 @@
 # NCAA Football 10 PSP Web Recomp — handoff
 
-Snapshot: 2026-10-13. Read [ENGINEERING_LOG.md](ENGINEERING_LOG.md) for verified history and [AGENTS.md](AGENTS.md) before editing.
+Snapshot: 2026-10-14. Read [ENGINEERING_LOG.md](ENGINEERING_LOG.md) for verified history and [AGENTS.md](AGENTS.md) before editing.
 
 ## Start here
 
@@ -18,7 +18,15 @@ This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAs
 
 ## Latest rendering and reference evidence
 
-### Current mipmap checkpoint
+### Current ordered-dither checkpoint (2026-10-14)
+
+The captured final draw's missing ordered dither is now implemented for GLES unblended draws/clears and software rasterization. Signed matrix values affect RGB before saturation and target packing, including 8888 and clear mode. Matrix phase follows logical PSP pixels, including surface origins and 2x rendering. The first fixture expected RGB565 word 0x732B but received 0x7B4C; it now passes in both backends. Coverage includes four target formats, matrix changes, negative/positive limits, enable/disable, clears, relocated targets and scaling. Software blend tests verify dithering before saturation. GLES blended dithering still requires a post-blend path and remains open; it is deliberately not applied to the source color.
+
+Direct software-reference RGB MAE improves from 4.6312 to 4.3781 for SDSU and 5.0452 to 4.7421 for Georgia Tech-Georgia. SDSU field ROI improves from 5.2904 to 4.8830. The hardware-window metric worsens overall from 7.6518 to 7.7588 while its field ROI improves from 5.5334 to 5.4629. Both methods remain documented separately. Local reports and dither-comparison.png are in the existing capture folders; neither is fresh browser gameplay or hardware proof.
+
+Latest package: build/static-ncaa10-dither (14 companions, no ISO); log: build/ncaa-dither-web-build.log. Ten native suites, eight package cases, web build and NCAA identity verification pass. Native Chrome fallback was attempted after the browser connector exposed no browser, but Computer Use app approval timed out before navigation. Live gameplay/FPS remains pending; the temporary server on 8633 was stopped. A request to approve Chrome app access is pending. Keep original game/save state intact. Default 64 MiB guest RAM / 56 MiB user partition and AOT execution are unchanged.
+
+### Prior mipmap checkpoint
 
 Next concrete regression target: SDSU primitive 5215 enables ordered dithering (`0x20=1`) for an unblended RGB565 final draw (`0x21=0`, `D2=0`). Signed rows are `[-4,0,-3,1]`, `[2,-2,3,-1]`, `[-3,1,-4,0]`, `[3,-1,2,-2]`. The renderer currently has no dither stage. Full state is local `build/reference-sdsu-day-20261013/final-draw-dither-state.json`; establish exact pixel results before attributing the remaining scene error or adding a workaround.
 

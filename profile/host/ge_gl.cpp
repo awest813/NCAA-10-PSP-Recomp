@@ -82,6 +82,9 @@ uniform vec3 u_fog_color;
 uniform vec3 u_lod_params; // mode, signed bias in levels, slope
 uniform vec3 u_lod_limits; // last uploaded level, mip interpolation, render scale
 uniform vec2 u_lod_filter; // within-level min/mag linear filtering
+uniform bool u_dither;
+uniform ivec4 u_dither_rows;
+uniform vec2 u_origin;
 in vec3 v_uv;
 in vec4 v_color;
 in vec3 v_secondary;
@@ -100,6 +103,12 @@ bool compare(int f, int a, int b) {
     return a >= b;
 }
 vec4 quantize_output(vec4 color) {
+    if (u_dither) {
+        ivec2 pixel = ivec2(floor(gl_FragCoord.xy / u_lod_limits.z - u_origin));
+        int nibble = (u_dither_rows[pixel.y & 3] >> ((pixel.x & 3) * 4)) & 15;
+        int delta = (nibble ^ 8) - 8;
+        color.rgb = clamp(floor(color.rgb * 255.0 + 0.5) + float(delta), 0.0, 255.0) / 255.0;
+    }
     if (u_output_format < 3) {
         uvec3 bytes = uvec3(clamp(color.rgb, 0.0, 1.0) * 255.0 + 0.5);
         if (u_output_format == 2) {
@@ -581,6 +590,8 @@ bool GeGl::init() {
     u_lod_params_ = glGetUniformLocation(program_, "u_lod_params");
     u_lod_limits_ = glGetUniformLocation(program_, "u_lod_limits");
     u_lod_filter_ = glGetUniformLocation(program_, "u_lod_filter");
+    u_dither_ = glGetUniformLocation(program_, "u_dither");
+    u_dither_rows_ = glGetUniformLocation(program_, "u_dither_rows");
     u_present_tex_ = glGetUniformLocation(present_program_, "u_tex");
     u_present_rect_ = glGetUniformLocation(present_program_, "u_rect");
     u_present_origin_ = glGetUniformLocation(present_program_, "u_origin");
@@ -1376,6 +1387,15 @@ void GeGl::apply_state() {
     // Unblended writes and clears can pack directly. Blended writes need
     // quantization after the host blend equation, not on the source color.
     set_uniform_int(u_output_format_, s.clear || !s.blend ? static_cast<int>(s.fb_format) : 3);
+    // A blended draw needs dithering after the host blend equation. Do not
+    // perturb its source color with the unblended fragment-output path.
+    set_uniform_int(u_dither_, s.dither && (s.clear || !s.blend) ? 1 : 0);
+    if (s.dither && (!cache_.dither_rows_valid || cache_.dither_rows != s.dither_rows)) {
+        glUniform4i(u_dither_rows_, static_cast<GLint>(s.dither_rows[0]), static_cast<GLint>(s.dither_rows[1]),
+                    static_cast<GLint>(s.dither_rows[2]), static_cast<GLint>(s.dither_rows[3]));
+        cache_.dither_rows = s.dither_rows;
+        cache_.dither_rows_valid = true;
+    }
     set_uniform(u_lod_params_, static_cast<float>(s.lod_mode), s.lod_bias, s.lod_slope, 3);
     set_uniform(u_lod_limits_, static_cast<float>(s.mip_count), s.mip_linear ? 1.0f : 0.0f,
                 static_cast<float>(scale_), 3);

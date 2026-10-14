@@ -89,6 +89,24 @@ Final source replays preserve primitive/draw counts, zero GPU downloads and two 
 
 Current scope: regular, backed mip chains; malformed/irregular chains stop at their valid prefix. That fallback, complete hardware LOD/raster precision and all filter edge cases are unverified. GPU-rendered mip chains can require coherent CPU readback; the supplied frames do not trigger it. The software diagnostic backend still samples level zero. Broader blend, alpha/stencil/dithering and scene fidelity remain open. Web build/package and ten native suites pass, but no browser was available to automation for fresh gameplay or sustained FPS measurement. Package: `build/static-ncaa10-mipmaps`; default guest memory stays 64 MiB.
 
+## Ordered dithering checkpoint (2026-10-14)
+
+The missing dither stage is now present in software rasterization and GLES unblended draws/clears. It applies the signed 4x4 matrix to RGB before saturation and packing, with logical PSP pixel phase preserved across surface offsets and 2x host rendering. The initial fixture failed with RGB565 word `0x7B4C` instead of `0x732B`. It now passes across 565/5551/4444/8888 RGB, two matrices including signed extrema, enable/disable transitions, clear/ordinary drawing, target offsets and scaled rendering. Alpha/stencil precision is outside this fixture. Software add/subtract blend cases also verify dither before saturation rather than after clamping.
+
+The behavior follows the independently studied pinned [pixel pipeline](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/DrawPixel.cpp) and [dither state setup](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/FuncId.cpp), including clear mode and 8888. No reference source was copied. GLES blended draws still need dithering after the host blend equation; applying it to source color would be incorrect, so that path remains open.
+
+| Same reference method | Before dither | After dither |
+| --- | --- | --- |
+| SDSU direct software, full RGB MAE | 4.6312 | 4.3781 |
+| SDSU direct software, field ROI | 5.2904 | 4.8830 |
+| Georgia Tech–Georgia direct software, full RGB MAE | 5.0452 | 4.7421 |
+| SDSU hardware window, full RGB MAE | 7.6518 | 7.7588 |
+| SDSU hardware window, field ROI | 5.5334 | 5.4629 |
+
+The software comparisons improve; hardware-window results are mixed. Residual field/player shading and general rendering accuracy remain open. Draw/download/upload counts are unchanged. `recomp-dither.png`, `dither-comparison.png`, `dither-replay.log` and updated comparison JSON files preserve results in both capture folders. The three columns are software reference / prior mip renderer / dither renderer. These are native capture replays, not live browser output.
+
+Web build, ten native suites, eight static-package cases and exact title/executable verification pass. Latest package: `build/static-ncaa10-dither`; log: `build/ncaa-dither-web-build.log`. With the browser connector inventory empty, native Chrome access was attempted through Computer Use. Its app approval timed out before navigation; no live gameplay or sustained FPS result is claimed. The temporary loopback server was stopped. Chrome access approval was requested for the pending live check. Default guest RAM remains 64 MiB / 56 MiB user partition.
+
 ## Authorized live SDSU heap inspection
 
 The user opened the original reference's memory viewer and authorized inspection. Read-only debugger mapping confirms 32 MiB RAM / 24 MiB user memory and the active NCAA2007 module. A brief debugger pause captured `build/reference-ppsspp/sdsu-live-32mib-20261013.ram`; the following resume completed. `sdsu-live-main-heap.json` was produced with `scripts/analyze_ncaa_heap.py`.
