@@ -43,9 +43,29 @@ GPU-to-GPU sampling previously retained RGBA8 channel values when the PSP target
 
 This change deliberately excludes blended writes, which need quantization after the host blend equation. Alpha/stencil precision, dithering and full raster precision remain open. The matched window-derived SDSU full RGB MAE increases from 6.7470 to 7.6379, with field ROI increasing from 5.3173 to 5.3813. Evidence: `recomp-quantized.png` and `comparison.json`. These results do not establish improved overall frame agreement. A nearest-filter diagnostic also failed to resolve the residual field difference. Display filtering changes window-comparison metrics; keep those experiments separate from exact framebuffer comparisons.
 
-The attempted software reference in `build/reference-software-20261013` is excluded. Windows v1.20.4 parses `-software` as `-s`, leaving a paused hardware replay; its actual software selection is `--graphics=software`, as shown in the pinned [Windows command-line parser](https://github.com/hrydgard/ppsspp/blob/v1.20.4/Windows/main.cpp). INI intent alone did not verify the backend. `ppsspp-software-window.png` is therefore a hardware replay despite its filename. `ppsspp-software-native.png` was produced from all-zero VRAM after a pause timeout, and the corresponding `software-comparison.json` metrics are invalid. Their local metadata now records this explicitly. The test-only instance was closed; original sessions and captures were preserved. A verified software reference remains future work.
+The attempted software reference in `build/reference-software-20261013` is excluded. Windows v1.20.4 parses `-software` as `-s`, leaving a paused hardware replay; its actual software selection is `--graphics=software`, as shown in the pinned [Windows command-line parser](https://github.com/hrydgard/ppsspp/blob/v1.20.4/Windows/main.cpp). INI intent alone did not verify the backend. `ppsspp-software-window.png` is therefore a hardware replay despite its filename. `ppsspp-software-native.png` was produced from all-zero VRAM after a pause timeout, and the corresponding `software-comparison.json` metrics are invalid. Their local metadata now records this explicitly. The test-only instance was closed; original sessions and captures were preserved. The subsequent verified software references are recorded below.
 
 The final web build and eight package cases pass; package `build/static-ncaa10-target-precision` contains 14 companions without the ISO. Ten native suites, debugger regressions and title/executable verification pass. No fresh browser gameplay test was performed for this final precision patch; the existing origin 8632 runs the preceding build. The 64 MiB guest RAM / 56 MiB user partition default is unchanged.
+
+## Verified direct software references and filter correction
+
+The subsequent isolated reference used the actual Windows v1.20.4 `--graphics=software` argument, confirmed from its process command line and the pinned parser. Direct VRAM reads now contain coherent RGB565 output. Three separate SDSU reads and two Georgia Tech–Georgia reads match byte for byte within each scene. Each raw capture is 278,528 bytes, stride 512; decoded visible output is 480×272 with no window crop or scaling. CPU pause still does not complete during GE replay, so these are repeated consistent full-frame reads of a static replay, not a successful paused debugger screenshot.
+
+SDSU raw SHA-256: `bf83a6d2fd732354de777686017ca493e3f9ec7ad789a534780d17a3831bcf44`. Georgia Tech–Georgia raw SHA-256: `e07445dfe185ba02a8a5772d79cca3576520891eec08edeb945954ef09246ef9`. Captures are `build/reference-ppsspp/sdsu-software-correct-vram565*` and `gt-software-correct-vram565*`; profile intent, exclusions and repeatability are recorded in `build/reference-software-20261013/profile-manifest.json`. The test-only process was closed after capture. Failed/mislabeled earlier images remain excluded.
+
+| Direct software-reference comparison | Full RGB MAE, 0–255 | Field ROI MAE |
+| --- | --- | --- |
+| SDSU before target precision correction | 5.4133 | 5.4374 |
+| SDSU after target precision correction | 4.7815 | 5.3183 |
+| SDSU after independent filter correction | 4.7815 | 5.3183 |
+| Project software GE against SDSU reference | 2.5339 | 2.5006 |
+| Georgia Tech–Georgia pause, before/after filter correction | 5.1176 | Not measured |
+
+Reports and comparison images are `verified-software-comparison.json/png` in the respective capture folders. Both frames retain field/player differences. These software-reference metrics use a different reference and method from the earlier hardware-window metrics; do not combine them or claim hardware accuracy. The project software backend is also imperfect.
+
+The filter investigation found an independent source bug: host minification and magnification both followed the GE mag bit. They now have separate state and 16 cached sampler combinations covering nearest/linear and U/V wrap/clamp. An actual-display-list shrinking fixture previously expected gray `0x808080` but received white `0xFFFFFF`; it now passes alongside enlargement, wrap/clamp and state-reset checks. PSP min/mag parameters are independent in the [PSPSDK implementation](https://github.com/pspdev/pspsdk/blob/master/src/gu/sceGuTexFilter.c). This change samples level zero as before; mip selection and mip blending remain unimplemented. Captured SDSU primitive 323 has `TEXMODE=0x020001`, `TEXFILTER=0x000107`, `TEXLEVEL=0x000002`, `TEXSLOPE=0x3DB439`; record those states before investigating the remaining detail draw, rather than assuming the missing mip path is the established cause.
+
+The latest web package is `build/static-ncaa10-texture-filter`; web build, ten native suites, eight package cases and ULUS10440 identity verification pass. Browser inventory exposed no browser and IAB creation failed, so this source change has no fresh live browser gameplay verification. The temporary server was stopped. Default guest memory remains 64 MiB / 56 MiB user partition.
 
 ## Authorized live SDSU heap inspection
 

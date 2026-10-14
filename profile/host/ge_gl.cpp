@@ -565,12 +565,13 @@ bool GeGl::init() {
     glGenTextures(1, &scratch_texture_);
     // Bound whenever a draw samples nothing, so no framebuffer texture stays
     // bound to the sampler (WebGL rejects that as a feedback loop).
-    // Samplers for every filter/wrap combination: index = linear | clamp_u << 1 | clamp_v << 2.
-    glGenSamplers(8, samplers_);
-    for (int i = 0; i < 8; ++i) {
-        const GLint filter = (i & 1) != 0 ? GL_LINEAR : GL_NEAREST;
-        glSamplerParameteri(samplers_[i], GL_TEXTURE_MIN_FILTER, filter);
-        glSamplerParameteri(samplers_[i], GL_TEXTURE_MAG_FILTER, filter);
+    // Independent min/mag filters with every wrap combination. Mipmap level
+    // selection is separate; these samplers currently sample level zero.
+    // Index = mag_linear | clamp_u << 1 | clamp_v << 2 | min_linear << 3.
+    glGenSamplers(16, samplers_);
+    for (int i = 0; i < 16; ++i) {
+        glSamplerParameteri(samplers_[i], GL_TEXTURE_MIN_FILTER, (i & 8) != 0 ? GL_LINEAR : GL_NEAREST);
+        glSamplerParameteri(samplers_[i], GL_TEXTURE_MAG_FILTER, (i & 1) != 0 ? GL_LINEAR : GL_NEAREST);
         glSamplerParameteri(samplers_[i], GL_TEXTURE_WRAP_S, (i & 2) != 0 ? GL_CLAMP_TO_EDGE : GL_REPEAT);
         glSamplerParameteri(samplers_[i], GL_TEXTURE_WRAP_T, (i & 4) != 0 ? GL_CLAMP_TO_EDGE : GL_REPEAT);
     }
@@ -1465,7 +1466,8 @@ void GeGl::apply_state() {
     }
     bind_texture0(texture);
     const bool clamp_u = s.clamp_u || s.tex_from_target, clamp_v = s.clamp_v || s.tex_from_target;
-    const GLuint sampler = samplers_[(s.linear ? 1 : 0) | (clamp_u ? 2 : 0) | (clamp_v ? 4 : 0)];
+    const GLuint sampler = samplers_[(s.mag_linear ? 1 : 0) | (clamp_u ? 2 : 0) | (clamp_v ? 4 : 0) |
+                                     (s.min_linear ? 8 : 0)];
     if (cache_.sampler != sampler) {
         glBindSampler(0, sampler);
         cache_.sampler = sampler;

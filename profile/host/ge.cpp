@@ -1780,7 +1780,8 @@ void Ge::submit_gl_state() {
         st.env = regs_[kTexEnvColor] & 0xFFFFFFu;
         st.clamp_u = (regs_[kTexWrap] & 1u) != 0u;
         st.clamp_v = (regs_[kTexWrap] & 0x100u) != 0u;
-        st.linear = (regs_[0xC6] & 0x100u) != 0u;
+        st.min_linear = (regs_[0xC6] & 1u) != 0u;
+        st.mag_linear = (regs_[0xC6] & 0x100u) != 0u;
         const std::uint32_t address = (regs_[kTexAddr0] & 0xFFFFF0u) | ((regs_[kTexBufWidth0] & 0x0F0000u) << 8u);
         const std::uint32_t format = regs_[kTexFormat] & 0xFu;
         const std::uint32_t buf_width = regs_[kTexBufWidth0] & 0x7FFu;

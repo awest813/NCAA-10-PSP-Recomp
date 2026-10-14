@@ -48,6 +48,10 @@ Paths are relative to the repository root containing `scripts` and `profile`. Ex
 
 ## Preparing a useful patch or report
 
+**Keep minification and magnification separate.** GE `TEXFILTER` carries independent settings. Test a striped texture at both shrinking and enlarging scales, change only one filter and revisit the original state. Include wrap/clamp combinations to exercise sampler-cache selection. This validates filtering within one mip level; mip selection and interpolation between levels require their own fixtures.
+
+**Separate reference methods.** A coherent, repeatable software-rendered VRAM capture avoids window scaling, but is still a software reference rather than hardware proof. Report its format, stride, hashes and capture consistency, and retain hardware-window results separately. The same change can improve one metric and worsen the other.
+
 **Validate GPU sampling without readback.** Packing a 16-bit target only when the CPU downloads it leaves GPU texture sampling at the wrong precision. Draw into each target format, sample it into a separate 8888 target and assert that no download occurred. Unblended output can be packed in the shader; blended output needs conversion after the blend equation. A targeted fixture can prove a semantics fix even when a window-derived frame metric gets worse; report both results and retain the unresolved frame differences.
 
 **Verify the reference backend.** Command-line switches differ by platform and version. Windows PPSSPP v1.20.4 selects software with `--graphics=software`; `-software` is parsed as its pause switch. Requested INI settings and filenames do not prove the actual renderer. Reject all-zero or failed readbacks before calculating visual accuracy.

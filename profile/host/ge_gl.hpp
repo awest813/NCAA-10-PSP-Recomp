@@ -61,7 +61,7 @@ struct GlDrawState {
     std::uint32_t tex_func{};
     bool tex_alpha{}, tex_double{};
     std::uint32_t env{};
-    bool clamp_u{}, clamp_v{}, linear{};
+    bool clamp_u{}, clamp_v{}, min_linear{}, mag_linear{};
     // Texture source: decoded texels, or a surface region at tex_address.
     const std::uint32_t *texels{};
     const void *texture_identity{};
@@ -257,7 +257,7 @@ private:
     void set_uniform(GLint location, float a, float b = 0.0f, float c = 0.0f, int count = 1);
     void set_uniform_int(GLint location, int value);
     Cache cache_{};
-    GLuint samplers_[8]{};
+    GLuint samplers_[16]{};
 
     psprecomp::GuestMemory &memory_;
     GLuint program_{}, present_program_{};

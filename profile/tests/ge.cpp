@@ -727,6 +727,39 @@ void doubled_destination_alpha(bool use_gl) {
     }
 }
 
+// Minification and magnification are independent GE filter settings. Use a
+// striped texture with known fractional sample positions in both regimes.
+void texture_filters() {
+    std::cout << "Texture min/mag filter tests: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl);
+    constexpr std::uint32_t texture = vertices + 0x1000;
+    for (unsigned y = 0; y < 2; ++y)
+        for (unsigned x = 0; x < 64; ++x)
+            memory.store32(texture + (y * 64 + x) * 4, x & 1 ? 0xFFFFFFFFu : 0xFF000000u);
+    for (bool minify : {true, false}) {
+        const std::array<float, 10> data = {0, .5f, 0, 0, 0, minify ? 128.0f : 32.0f, .5f, 64, 64, 0};
+        for (unsigned i = 0; i < data.size(); ++i)
+            memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(data[i]));
+        for (unsigned wrap : {0u, 1u, 0x100u, 0x101u})
+        for (unsigned filter : {0u, 1u, 0x100u, 0x101u, 0u}) {
+            DisplayList draw(memory);
+            draw.command(0x9C, 0); draw.command(0x9D, 64); draw.command(0xD2, 3);
+            draw.command(0xD4, 0); draw.command(0xD5, 63 | (63 << 10));
+            draw.command(0x12, 3u | (3u << 7u) | (1u << 23)); draw.command(0x1E, 1);
+            draw.command(0xA0, texture & 0xFFFFFF); draw.command(0xA8, 0x080040);
+            draw.command(0xB8, 0x106); draw.command(0xC3, 3); draw.command(0xC9, 3);
+            draw.command(0xC7, wrap);
+            draw.command(0xC6, filter); draw.draw(6, 2); draw.run(ge);
+            const bool linear = (filter & (minify ? 1u : 0x100u)) != 0;
+            const unsigned channel = minify ? (linear && !(wrap & 1) ? 128 : 255) : (linear ? 64 : 0);
+            expect_pixel(memory, &gl, channel * 0x010101u, 1);
+        }
+    }
+}
+
 // Sampling a GPU-rendered 16-bit target must see its packed channel precision,
 // even when no CPU readback occurred between drawing and sampling it.
 void render_target_precision(bool use_gl) {
@@ -865,5 +898,6 @@ int main() {
     integer_depth(true);
     doubled_destination_alpha(true);
     render_target_precision(true);
-    std::cout << "GE lighting, texture-coordinate, fog, integer-depth, doubled-alpha and target-precision tests passed (software and GLES3)\n";
+    texture_filters();
+    std::cout << "GE shared software/GLES3 tests and GLES3 min/mag filter tests passed\n";
 }
