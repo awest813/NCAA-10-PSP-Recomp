@@ -48,6 +48,10 @@ Paths are relative to the repository root containing `scripts` and `profile`. Ex
 
 ## Preparing a useful patch or report
 
+**Validate GPU sampling without readback.** Packing a 16-bit target only when the CPU downloads it leaves GPU texture sampling at the wrong precision. Draw into each target format, sample it into a separate 8888 target and assert that no download occurred. Unblended output can be packed in the shader; blended output needs conversion after the blend equation. A targeted fixture can prove a semantics fix even when a window-derived frame metric gets worse; report both results and retain the unresolved frame differences.
+
+**Verify the reference backend.** Command-line switches differ by platform and version. Windows PPSSPP v1.20.4 selects software with `--graphics=software`; `-software` is parsed as its pause switch. Requested INI settings and filenames do not prove the actual renderer. Reject all-zero or failed readbacks before calculating visual accuracy.
+
 Provide the concrete trigger and observed before/after behavior, the smallest source change, a synthetic regression when feasible, tested platforms/settings and relevant license attribution. State whether the change is general PSP behavior or a title-specific adaptation. Include a repro sequence and compact diagnostic values; share only data suitable for the destination.
 
 A useful bug report might say: “An aligned allocation fails despite sufficient aggregate space; here are the pool bounds, physical/free-list integrity, requested size, alignment and relevant allocation/free order.” It should not conclude “the STORE emitter is broken” solely from a null destination.

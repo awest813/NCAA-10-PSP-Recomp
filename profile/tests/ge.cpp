@@ -727,6 +727,52 @@ void doubled_destination_alpha(bool use_gl) {
     }
 }
 
+// Sampling a GPU-rendered 16-bit target must see its packed channel precision,
+// even when no CPU readback occurred between drawing and sampling it.
+void render_target_precision(bool use_gl) {
+    std::cout << "Render-target precision tests: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    auto *backend = use_gl ? &gl : nullptr;
+    for (unsigned format : {0u,1u,2u})
+    for (unsigned color : {0x3264FAu,0x102008u,0xFFFFFFu,0u}) for (bool clear : {false,true}) {
+        const unsigned source_offset=format*0x10000u;
+        const std::array<float,6> source_vertices={0,0,0,64,64,0};
+        for (unsigned i=0;i<source_vertices.size();++i)
+            memory.store32(vertices+i*4u,std::bit_cast<std::uint32_t>(source_vertices[i]));
+        DisplayList first(memory);
+        first.command(0x9C,source_offset);first.command(0x9D,64);first.command(0xD2,format);
+        first.command(0xD4,0);first.command(0xD5,63|(63<<10));
+        first.command(0x12,(3u<<7)|(1u<<23));first.command(0x1E,0);
+        first.command(0x55,color);first.command(0x58,255);first.command(0xD3,clear?0x101:0);
+        first.draw(6,2);first.run(ge);
+        if (backend) {
+            backend->flush();
+            assert(backend->is_gpu_target(0x04000000u+source_offset,format,64));
+        }
+        const auto downloads_before=backend?backend->downloads():0;
+        const std::array<float,15> textured_vertices={8,8,8,8,0,56,8,56,8,0,32,56,32,56,0};
+        for (unsigned i=0;i<textured_vertices.size();++i)
+            memory.store32(vertices+i*4u,std::bit_cast<std::uint32_t>(textured_vertices[i]));
+        DisplayList second(memory);
+        second.command(0x9C,0x60000);second.command(0xD2,3);second.command(0xD3,0);
+        second.command(0x12,3u|(3u<<7)|(1u<<23));second.command(0x1E,1);
+        second.command(0xA0,source_offset);second.command(0xA8,0x040040);
+        second.command(0xB8,0x606);second.command(0xC3,format);second.command(0xC9,3);second.command(0xC6,0);
+        second.draw();second.run(ge);
+        if (backend) {backend->flush();assert(backend->downloads()==downloads_before);}
+        auto expand=[](unsigned value,unsigned bits){
+            const unsigned packed=value>>(8-bits);
+            return bits==4 ? packed*17 : bits==5 ? (packed<<3)|(packed>>2) : (packed<<2)|(packed>>4);
+        };
+        const unsigned bits=format==2?4:5;
+        const unsigned expected=expand(color&255,bits)|(expand((color>>8)&255,format==0?6:bits)<<8)|(expand((color>>16)&255,bits)<<16);
+        expect_pixel(memory,backend,expected,0,sample+0x60000);
+    }
+}
+
 // PSP depth storage compares integer 16-bit values, including fractional
 // drawing-space depths that collapse to the same integer after rasterization.
 void integer_depth(bool use_gl) {
@@ -810,6 +856,7 @@ int main() {
     fog_depth(false);
     integer_depth(false);
     doubled_destination_alpha(false);
+    render_target_precision(false);
     GlContext context;
     lighting_colors(true);
     lighting_components(true);
@@ -817,5 +864,6 @@ int main() {
     fog_depth(true);
     integer_depth(true);
     doubled_destination_alpha(true);
-    std::cout << "GE lighting, texture-coordinate, fog, integer-depth and doubled-alpha tests passed (software and GLES3)\n";
+    render_target_precision(true);
+    std::cout << "GE lighting, texture-coordinate, fog, integer-depth, doubled-alpha and target-precision tests passed (software and GLES3)\n";
 }

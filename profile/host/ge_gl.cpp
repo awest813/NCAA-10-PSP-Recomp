@@ -70,6 +70,7 @@ uniform int u_alpha_ref;
 uniform int u_alpha_mask;
 uniform vec3 u_src_scale;
 uniform bool u_blend_alpha_to_rgb;
+uniform int u_output_format;
 uniform bool u_clear;
 uniform vec2 u_tex_window; // PSP texture size when sampling part of a larger surface (else 0)
 uniform vec2 u_tex_clamp;  // 1 = clamp, 0 = repeat, per axis
@@ -92,13 +93,27 @@ bool compare(int f, int a, int b) {
     if (f == 6) return a > b;
     return a >= b;
 }
+vec4 quantize_output(vec4 color) {
+    if (u_output_format < 3) {
+        uvec3 bytes = uvec3(clamp(color.rgb, 0.0, 1.0) * 255.0 + 0.5);
+        if (u_output_format == 2) {
+            bytes = (bytes >> 4) * 17u;
+        } else {
+            uvec3 packed = bytes >> uvec3(3u, u_output_format == 0 ? 2u : 3u, 3u);
+            bytes = (packed << uvec3(3u, u_output_format == 0 ? 2u : 3u, 3u)) |
+                    (packed >> uvec3(2u, u_output_format == 0 ? 4u : 2u, 2u));
+        }
+        color.rgb = vec3(bytes) / 255.0;
+    }
+    return color;
+}
 void main() {
     // The GE stores integer 16-bit depth. Preserve that precision before
     // comparisons even though the host attachment has 24 depth bits.
     gl_FragDepth = floor(gl_FragCoord.z * 65535.0) / 65535.0;
     vec4 c = v_color / v_color_w;
     if (u_clear) {
-        o_color = c;
+        o_color = quantize_output(c);
         return;
     }
     if (u_tex_enable) {
@@ -148,7 +163,7 @@ void main() {
     }
     c.rgb *= u_src_scale;
     if (u_blend_alpha_to_rgb) c.rgb = vec3(c.a);
-    o_color = c;
+    o_color = quantize_output(c);
 }
 )";
 
@@ -501,6 +516,7 @@ bool GeGl::init() {
     u_alpha_mask_ = glGetUniformLocation(program_, "u_alpha_mask");
     u_src_scale_ = glGetUniformLocation(program_, "u_src_scale");
     u_blend_alpha_to_rgb_ = glGetUniformLocation(program_, "u_blend_alpha_to_rgb");
+    u_output_format_ = glGetUniformLocation(program_, "u_output_format");
     u_clear_ = glGetUniformLocation(program_, "u_clear");
     u_tex_window_ = glGetUniformLocation(program_, "u_tex_window");
     u_tex_clamp_ = glGetUniformLocation(program_, "u_tex_clamp");
@@ -1286,6 +1302,9 @@ void GeGl::apply_state() {
     set_uniform(u_origin_, static_cast<float>(ox), static_cast<float>(oy), 0.0f, 2);
     set_uniform_int(u_clear_, s.clear ? 1 : 0);
     set_uniform_int(u_blend_alpha_to_rgb_, 0);
+    // Unblended writes and clears can pack directly. Blended writes need
+    // quantization after the host blend equation, not on the source color.
+    set_uniform_int(u_output_format_, s.clear || !s.blend ? static_cast<int>(s.fb_format) : 3);
 
     GLuint texture = 0u;
     if (!s.clear && s.texture) texture = texture_for_state(source, source_ox, source_oy);
