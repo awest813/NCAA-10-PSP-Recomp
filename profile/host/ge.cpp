@@ -1,4 +1,5 @@
 #include "ge.hpp"
+#include "ge_math.hpp"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -203,9 +204,9 @@ const bool g_list_timing = true;
 #endif
 
 void transform43(const std::array<float, 12> &m, const float in[3], float out[3]) {
-    out[0] = in[0] * m[0] + in[1] * m[3] + in[2] * m[6] + m[9];
-    out[1] = in[0] * m[1] + in[1] * m[4] + in[2] * m[7] + m[10];
-    out[2] = in[0] * m[2] + in[1] * m[5] + in[2] * m[8] + m[11];
+    out[0] = ge_math::dot({in[0], in[1], in[2], 1}, {m[0], m[3], m[6], m[9]});
+    out[1] = ge_math::dot({in[0], in[1], in[2], 1}, {m[1], m[4], m[7], m[10]});
+    out[2] = ge_math::dot({in[0], in[1], in[2], 1}, {m[2], m[5], m[8], m[11]});
 }
 
 void rotate43(const std::array<float, 12> &m, const float in[3], float out[3]) {
@@ -337,14 +338,12 @@ void Ge::execute(std::uint32_t op) {
         break;
     case kViewMatrixData:
         matrix_dirty_ = true;
-        pv_dirty_ = true;
         light_dirty_ = true; // the specular viewer direction follows the view matrix
         tex_dirty_ = true; // shade mapping's specular light vectors use it too
         fog_dirty_ = true;
         break;
     case kProjMatrixData:
         matrix_dirty_ = true;
-        pv_dirty_ = true;
         break;
     default:
         if (cmd < kMorphWeight0 || cmd >= kMorphWeight0 + 8u) state_dirty_ = true;
@@ -568,30 +567,30 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
     }
 
     if (use_wvp_) {
-        out.cx = model[0] * wvp_[0] + model[1] * wvp_[4] + model[2] * wvp_[8] + wvp_[12];
-        out.cy = model[0] * wvp_[1] + model[1] * wvp_[5] + model[2] * wvp_[9] + wvp_[13];
-        out.cz = model[0] * wvp_[2] + model[1] * wvp_[6] + model[2] * wvp_[10] + wvp_[14];
-        out.cw = model[0] * wvp_[3] + model[1] * wvp_[7] + model[2] * wvp_[11] + wvp_[15];
+        out.cx = ge_math::dot({model[0], model[1], model[2], 1}, {wvp_[0], wvp_[4], wvp_[8], wvp_[12]});
+        out.cy = ge_math::dot({model[0], model[1], model[2], 1}, {wvp_[1], wvp_[5], wvp_[9], wvp_[13]});
+        out.cz = ge_math::dot({model[0], model[1], model[2], 1}, {wvp_[2], wvp_[6], wvp_[10], wvp_[14]});
+        out.cw = ge_math::dot({model[0], model[1], model[2], 1}, {wvp_[3], wvp_[7], wvp_[11], wvp_[15]});
         out.r = col[0];
         out.g = col[1];
         out.b = col[2];
         out.a = col[3];
-        out.u = (uv[0] * tex_.su + tex_.ou) * tex_.tw;
-        out.v = (uv[1] * tex_.sv + tex_.ov) * tex_.th;
+        out.u = ge_math::scale_offset(uv[0], tex_.su, tex_.ou) * tex_.tw;
+        out.v = ge_math::scale_offset(uv[1], tex_.sv, tex_.ov) * tex_.th;
         return;
     }
 
-    // Lighting works on world-space positions and normals; the clip position
-    // comes from those through the cached proj * view.
+    // World-space position is needed for lighting. Clip coordinates always use
+    // the model position and the GE-composed matrix, including lit/skinned draws.
     const bool lighting = (regs_[kLightingEnable] & 1u) != 0u;
     const std::uint32_t mapping = regs_[kTexMapMode] & 3u;
     float world[3], world_n[3] = {0, 0, 1};
     transform43(world_, model, world);
     if (lighting || mapping == 2u) rotate43(world_, normal, world_n);
-    out.cx = world[0] * pv_[0] + world[1] * pv_[4] + world[2] * pv_[8] + pv_[12];
-    out.cy = world[0] * pv_[1] + world[1] * pv_[5] + world[2] * pv_[9] + pv_[13];
-    out.cz = world[0] * pv_[2] + world[1] * pv_[6] + world[2] * pv_[10] + pv_[14];
-    out.cw = world[0] * pv_[3] + world[1] * pv_[7] + world[2] * pv_[11] + pv_[15];
+    out.cx = ge_math::dot({model[0], model[1], model[2], 1}, {wvp_[0], wvp_[4], wvp_[8], wvp_[12]});
+    out.cy = ge_math::dot({model[0], model[1], model[2], 1}, {wvp_[1], wvp_[5], wvp_[9], wvp_[13]});
+    out.cz = ge_math::dot({model[0], model[1], model[2], 1}, {wvp_[2], wvp_[6], wvp_[10], wvp_[14]});
+    out.cw = ge_math::dot({model[0], model[1], model[2], 1}, {wvp_[3], wvp_[7], wvp_[11], wvp_[15]});
 
     if (lighting) {
         float secondary[3]{};
@@ -608,8 +607,8 @@ void Ge::decode_vertex(std::uint32_t address, ClipVertex &out) const {
     const std::uint32_t map_mode = regs_[kTexMapMode] & 3u;
     float s = uv[0], t = uv[1];
     if (map_mode == 0u || map_mode == 3u) {
-        s = s * tex_.su + tex_.ou;
-        t = t * tex_.sv + tex_.ov;
+        s = ge_math::scale_offset(s, tex_.su, tex_.ou);
+        t = ge_math::scale_offset(t, tex_.sv, tex_.ov);
     } else if (map_mode == 1u) {
         const std::uint32_t source = (regs_[kTexMapMode] >> 8u) & 3u;
         float in[3] = {model[0], model[1], model[2]};
@@ -812,7 +811,6 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
     viewport_[5] = cmd_float(regs_[kViewportZCenter]);
     if (tex_dirty_) build_tex_setup();
     if (light_dirty_ && (regs_[kLightingEnable] & 1u) != 0u) build_light_setup();
-    const bool was_wvp = use_wvp_;
     use_wvp_ = !layout_.through && layout_.weight == 0u && (regs_[kLightingEnable] & 1u) == 0u &&
                (regs_[kTexMapMode] & 3u) == 0u;
     // Column-major 4x4: W and V are 4x3 with an implicit (0, 0, 0, 1) row.
@@ -823,17 +821,14 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
         std::array<float, 16> r{};
         for (int c = 0; c < 4; ++c)
             for (int row = 0; row < 4; ++row)
-                r[c * 4 + row] = a[row] * b[c * 4] + a[4 + row] * b[c * 4 + 1] + a[8 + row] * b[c * 4 + 2] +
-                                 a[12 + row] * b[c * 4 + 3];
+                r[c * 4 + row] = ge_math::dot({a[row], a[4 + row], a[8 + row], a[12 + row]},
+                    {b[c * 4], b[c * 4 + 1], b[c * 4 + 2], b[c * 4 + 3]});
         return r;
     };
-    if (!layout_.through && pv_dirty_) {
-        pv_ = multiply(proj_, expand(view_));
-        pv_dirty_ = false;
-    }
-    if (use_wvp_ && (matrix_dirty_ || !was_wvp)) {
+    if (!layout_.through && matrix_dirty_) {
         matrix_dirty_ = false;
-        wvp_ = multiply(pv_, expand(world_));
+        // GE combines world/view first; float24 truncation makes grouping visible.
+        wvp_ = multiply(proj_, multiply(expand(view_), expand(world_)));
     }
     if (gl_ == nullptr) {
         prepare_pixel_state();

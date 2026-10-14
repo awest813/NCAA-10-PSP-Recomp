@@ -193,16 +193,13 @@ private:
     std::array<std::uint64_t, 512> vram_pages_{};
     std::uint64_t vram_write_counter_{1};
     [[nodiscard]] std::uint64_t vram_stamp(std::uint32_t address, std::uint32_t bytes) const;
-    // World * view * projection for unlit, unskinned primitives.
+    // Column-major P * (V * W), composed using GE float24 row arithmetic.
     std::array<float, 16> wvp_{};
     bool use_wvp_{};
     // Render state and the combined matrix are rebuilt only after the
     // registers they depend on change (most consecutive primitives share them).
     bool state_dirty_{true};
     bool matrix_dirty_{true};
-    // proj * view, rebuilt only when either changes (the world matrix changes far more often).
-    std::array<float, 16> pv_{};
-    bool pv_dirty_{true};
     bool fog_dirty_{true};
     float fog_row_[4]{}, fog_end_{}, fog_slope_{};
     bool submitted_through_{};

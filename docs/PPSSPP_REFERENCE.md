@@ -1,6 +1,14 @@
 # PPSSPP reference evidence
 
-## Current hardware-tested software oracle (2026-10-14)
+## Latest float24 transform comparison (2026-10-14)
+
+The oracle remains pinned `61e60ee6ff` below. Independent finite GE row arithmetic now matches it on 1.1 million synthetic cases. Column-major matrices compose P * (V * W), and lit/skinned clip positions use that same combined matrix. UV scaling truncates the product before adding the offset. Actual software/GLES fixtures fail the prior source and pass the correction, including lit/unlit paths and cancellation-sensitive matrix grouping. No reference implementation was copied.
+
+Against `e1e373f`, all fourteen full/prefix MAEs improve or stay equal: SDSU 0.426162 → **0.417833**, GT 0.316575 → **0.311446**, prefix 317 0.806993 → **0.708252**. Local regressions remain visible: field ROI 0.034486 → **0.039298** and GT prefix-4092 ROI 0.961504 → **0.964311**. Full GT pause ROI remains 0.028872. RGBA8 presentations match direct RGB565. The previous migration table below is historical.
+
+Matched native medians rise 1.58% / 3.11%; this is an accuracy cost, not browser FPS evidence. Sixteen frames/run, first two excluded, O3 ABBA/FrameProfile both sides; final reads excluded. Evidence: `build/reference-transform-20261014/accepted-provenance.json`, `performance.json`, production row-oracle logs and `build/reference-hardware-20261014/transform/summary.json`. Latest package is `build/static-ncaa10-float24-release`. Finite row agreement does not establish nonfinite, reciprocal/viewport, normal/fog/lighting, full skin/morph or fixed-plane accuracy. No fresh browser or physical PSP comparison occurred.
+
+## Hardware-tested oracle and prior migration (2026-10-14)
 
 Current [GE arithmetic](https://www.ppsspp.org/docs/psp-hardware/gpu/arithmetic/) and [raster pipeline](https://www.ppsspp.org/docs/psp-hardware/gpu/raster-pipeline/) documentation describes PSP hardware measurements that the older release renderer did not implement: half-pixel coverage, fixed-point planes, floored channels and two separately truncated bilinear stages. The old 7/16/nearest-even comparisons remain historical evidence for that release, rather than current accuracy acceptance. The new oracle is official [CI run 38562253856](https://github.com/hrydgard/ppsspp/actions/runs/38562253856), pinned to [61e60ee6ff](https://github.com/hrydgard/ppsspp/tree/61e60ee6ff650e6fa2ff9b0019bc9fbb652d7fcb). Its GEMath tests pass. This is indirect hardware evidence, with physical PSP frame agreement still required for a broad accuracy claim.
 

@@ -1,5 +1,6 @@
 // Execute real GE display lists and inspect their pixels in both backends.
 #include "ge.hpp"
+#include "ge_math.hpp"
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <array>
@@ -8,6 +9,22 @@
 #include <iostream>
 
 namespace {
+void float24_rows() {
+    using pspweb::ge_math::dot;
+    auto bits = [](float value) { return std::bit_cast<std::uint32_t>(value); };
+    // Alignment drops the small positive term before the large terms cancel.
+    assert(bits(dot({32768, -32768, .75f, 0}, {1, 1, 1, 0})) == 0);
+    assert(bits(dot({-32768, 32768, -.75f, 0}, {1, 1, 1, 0})) == 0);
+    // Vertex inputs lose their low eight mantissa bits before multiplication.
+    assert(bits(dot({std::bit_cast<float>(0x3F8000FFu), 0, 0, 0}, {1, 0, 0, 0})) == 0x3F800000u);
+    // Represented subnormal output survives this stage, but not its next input.
+    const float sub = dot({0x1p-64f, 0, 0, 0}, {0x1p-64f, 0, 0, 0});
+    assert(bits(sub) == 0x00200000u);
+    assert(bits(dot({sub, 0, 0, 0}, {0x1p64f, 0, 0, 0})) == 0);
+    assert(bits(dot({0x1p100f, 0, 0, 0}, {0x1p100f, 0, 0, 0})) == 0x7F800000u);
+    assert(bits(pspweb::ge_math::scale_offset(1.5f, 1 + 0x1p-15f, -1.5f)) == 0x38000000u);
+}
+
 constexpr std::uint32_t list = 0x08800000u, vertices = 0x08810000u;
 constexpr std::uint32_t sample = 0x04000000u + (32u * 64u + 32u) * 4u;
 class DisplayList {
@@ -44,6 +61,71 @@ void expect_pixel(psprecomp::GuestMemory &memory, pspweb::GeGl *gl, std::uint32_
     }
     if (!matches) std::cerr << "pixel: expected 0x" << std::hex << rgb << ", got 0x" << actual << std::dec << '\n';
     assert(matches);
+}
+
+void float24_matrix_composition(bool use_gl) {
+    std::cout << "GE float24 matrix composition: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory; pspweb::GeGl gl(memory); pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    auto *backend = use_gl ? &gl : nullptr;
+    const std::array<float, 9> triangle = {-.5f, -.25f, 0, 0, .25f, 0, .5f, -.25f, 0};
+    for (unsigned i = 0; i < triangle.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(triangle[i]));
+    DisplayList setup(memory);
+    setup.command(0x9C, 0); setup.command(0x9D, 64); setup.command(0xD2, 3);
+    setup.command(0xD4, 0); setup.command(0xD5, 63 | (63 << 10));
+    setup.command(0x12, 3u << 7);
+    setup.number(0x42, 32); setup.number(0x43, 32); setup.number(0x44, 32767);
+    setup.number(0x45, 32); setup.number(0x46, 32); setup.number(0x47, 32767);
+    setup.command(0x55, 0xFFFFFF); setup.command(0x58, 255);
+    setup.command(0x3A, 0);
+    for (float v : std::array<float, 12>{1, 0, 0, 0, 1, 0, 0, 0, 1, 32768, 32768, 0}) setup.number(0x3B, v);
+    setup.command(0x3C, 0);
+    for (float v : std::array<float, 12>{1, 0, 0, -1, 1, 0, 0, 0, 1, .75f, -32768, 0}) setup.number(0x3D, v);
+    setup.command(0x3E, 0);
+    for (unsigned i = 0; i < 16; ++i) setup.number(0x3F, i == 0 ? 1.5f : (i % 5 == 0 ? 1.0f : 0.0f));
+    setup.draw(); setup.run(ge);
+    // P * (V * W) drops .75 before cancellation, centering the draw.
+    // Grouping (P * V) * W instead keeps an erroneous +1 translation.
+    expect_pixel(memory, backend, 0xFFFFFF);
+    // A lit draw uses the same combined clip matrix, not rounded world positions.
+    memory.store32(sample, 0);
+    if (backend) ge.touch_vram(sample, 4);
+    DisplayList lit(memory); lit.command(0x17, 1); lit.command(0x5C, 0xFFFFFF);
+    lit.command(0x5D, 255); lit.draw(); lit.run(ge);
+    expect_pixel(memory, backend, 0xFFFFFF);
+}
+
+void float24_uv_stages(bool use_gl) {
+    std::cout << "GE float24 UV stages: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory; pspweb::GeGl gl(memory); pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    auto *backend = use_gl ? &gl : nullptr;
+    constexpr auto texture = vertices + 0x2000;
+    memory.store32(texture, 0xFF0000FF); memory.store32(texture + 4, 0xFF00FF00);
+    const std::array<float, 15> triangle = {1.5f, 0, -.75f, -.75f, 0,
+                                          1.5f, 0, .75f, -.75f, 0,
+                                          1.5f, 0, 0, .75f, 0};
+    for (unsigned i = 0; i < triangle.size(); ++i)
+        memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(triangle[i]));
+    DisplayList setup(memory);
+    setup.command(0x9C, 0); setup.command(0x9D, 64); setup.command(0xD2, 3);
+    setup.command(0xD4, 0); setup.command(0xD5, 63 | (63 << 10));
+    setup.command(0x12, 3u | (3u << 7));
+    setup.number(0x42, 32); setup.number(0x43, 32); setup.number(0x44, 32767);
+    setup.number(0x45, 32); setup.number(0x46, 32); setup.number(0x47, 32767);
+    setup.command(0x55, 0xFFFFFF); setup.command(0x58, 255);
+    setup.command(0xA0, texture & 0xFFFFFF); setup.command(0xA8, 0x080200);
+    setup.command(0xB8, 9); setup.command(0xC3, 3); setup.command(0x1E, 1);
+    setup.command(0xC7, 0x0101); setup.command(0xC9, 3);
+    setup.number(0x48, -1 - 0x1p-15f); setup.number(0x49, 1);
+    setup.number(0x4A, 1.5f + 65 * 0x1p-15f);
+    setup.draw(); setup.run(ge);
+    // Separate product truncation selects texel 1; an IEEE expression selects 0.
+    expect_pixel(memory, backend, 0x00FF00);
+    DisplayList lit(memory); lit.command(0x17, 1); lit.command(0x5C, 0xFFFFFF);
+    lit.command(0x5D, 255); lit.draw(); lit.run(ge);
+    expect_pixel(memory, backend, 0x00FF00);
 }
 
 void texture_row_alignment(bool use_gl) {
@@ -2177,6 +2259,9 @@ struct GlContext {
 };
 }
 int main() {
+    float24_rows();
+    float24_uv_stages(false);
+    float24_matrix_composition(false);
     texture_row_alignment(false);
     triangle_sampling(false);
     line_coverage(false);
@@ -2194,6 +2279,8 @@ int main() {
     interpolated_color_precision(false);
     texture_function_precision(false);
     GlContext context;
+    float24_uv_stages(true);
+    float24_matrix_composition(true);
     texture_row_alignment(true);
     staged_bilinear_precision();
     affine_color_perspective_uv();
