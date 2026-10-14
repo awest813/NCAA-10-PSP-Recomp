@@ -37,24 +37,25 @@ uniform vec2 u_origin;
 out vec3 v_uv;
 out vec4 v_color;
 out vec3 v_secondary;
-out float v_color_w;
 out float v_fog;
 out float v_lod_w;
 void main() {
     float w = a_pos.w;
-    v_fog = a_fog * w;
+    v_fog = a_fog;
     vec2 ndc = (a_pos.xy + u_origin) / u_target * 2.0 - 1.0;
     float z = clamp(a_pos.z / 65535.0, 0.0, 1.0) * 2.0 - 1.0;
-    gl_Position = vec4(ndc * w, z * w, w);
-    v_uv = vec3(a_uv, a_q);
-    // GE colors interpolate in screen space, while UV remains perspective
-    // correct. Carry w with the colors to cancel GL's 1/w interpolation.
-    v_color = (a_color * 255.0) * w;
-    v_secondary = (a_secondary * 255.0) * w;
-    v_color_w = w;
+    gl_Position = vec4(ndc, z, 1.0);
+    v_uv = vec3(a_uv, a_q) / w;
+    // Drawing-space positions, colors, fog and depth interpolate affinely.
+    // Carry UV/w and Q/w explicitly, then divide in the fragment shader. This
+    // also keeps constant integer colors exact without a rounding epsilon.
+    // These inputs are normalized bytes, so recover their exact integers
+    // before interpolation. The fragment's interpolated result then floors.
+    v_color = floor(a_color * 255.0 + 0.5);
+    v_secondary = floor(a_secondary * 255.0 + 0.5);
     // Line cells already carry resolved UV and their discrete sampling
     // footprint. Reuse the otherwise-positive slope varying for that value.
-    v_lod_w = a_lod_footprint >= 0.0 ? -1.0 - a_lod_footprint : w * w;
+    v_lod_w = a_lod_footprint >= 0.0 ? -1.0 - a_lod_footprint : w;
 }
 )";
 
@@ -98,7 +99,6 @@ uniform vec2 u_origin;
 in vec3 v_uv;
 in vec4 v_color;
 in vec3 v_secondary;
-in float v_color_w;
 in float v_fog;
 in float v_lod_w;
 out vec4 o_color;
@@ -173,7 +173,9 @@ vec4 mip_level(vec2 uv, int level, bool linear) {
         vec2 f = floor(fract(at) * 16.0);
         vec4 top = mip_texel(p, level, size) * (16.0 - f.x) + mip_texel(p + ivec2(1, 0), level, size) * f.x;
         vec4 bottom = mip_texel(p + ivec2(0, 1), level, size) * (16.0 - f.x) + mip_texel(p + ivec2(1), level, size) * f.x;
-        color = floor((top * (16.0 - f.y) + bottom * f.y) / 256.0);
+        top = floor(top / 16.0);
+        bottom = floor(bottom / 16.0);
+        color = floor((top * (16.0 - f.y) + bottom * f.y) / 16.0);
     }
     return color;
 }
@@ -184,8 +186,8 @@ vec4 sample_mips(vec2 uv) {
         vec2 dy = abs(dFdy(uv)) * u_lod_limits.z;
         footprint = v_lod_w < 0.0 ? -v_lod_w - 1.0 : max(max(dx.x, dx.y), max(dy.x, dy.y));
     } else if (u_lod_params.x == 2.0) {
-        // Cancel perspective interpolation to recover screen-linear clip w.
-        footprint = v_lod_w < 0.0 ? -v_lod_w - 1.0 : 2.0 * (v_lod_w / v_color_w) * u_lod_params.z;
+        // Clip w is already interpolated linearly in drawing space.
+        footprint = v_lod_w < 0.0 ? -v_lod_w - 1.0 : 2.0 * v_lod_w * u_lod_params.z;
     }
     // The GE's LOD fraction is the high four mantissa bits, rather than a
     // transcendental log2. Signed bias applies in all three modes.
@@ -243,7 +245,7 @@ void main() {
     // The GE stores integer 16-bit depth. Preserve that precision before
     // comparisons even though the host attachment has 24 depth bits.
     gl_FragDepth = floor(gl_FragCoord.z * 65535.0) / 65535.0;
-    vec4 primary = v_color / v_color_w;
+    vec4 primary = v_color;
     vec4 c = primary / 255.0;
     if (u_clear) {
         o_color = quantize_output(c);
@@ -251,7 +253,7 @@ void main() {
     }
     // Interpolated colors become bytes before texture functions, alpha tests
     // and blending. Those later fixed-point operations still truncate.
-    primary = roundEven(clamp(primary, 0.0, 255.0));
+    primary = floor(clamp(primary, 0.0, 255.0));
     c = primary / 255.0;
     if (u_tex_enable) {
         vec2 uv;
@@ -287,8 +289,9 @@ void main() {
         c = clamp(c, 0.0, 255.0) / 255.0;
     }
     if (u_secondary_enable) {
-        vec3 secondary = roundEven(clamp(v_secondary / v_color_w, 0.0, 255.0));
-        c.rgb = clamp(c.rgb + secondary / 255.0, 0.0, 1.0);
+        vec3 secondary = floor(clamp(v_secondary, 0.0, 255.0));
+        float secondary_scale = u_tex_enable && u_tex_double ? 2.0 : 1.0;
+        c.rgb = clamp(c.rgb + secondary * secondary_scale / 255.0, 0.0, 1.0);
     }
     if (u_alpha_test) {
         int a = int(c.a * 255.0 + 0.5) & u_alpha_mask;
@@ -297,7 +300,7 @@ void main() {
     if (u_fog_enable) {
         // Fog, like color, interpolates in screen space. GE blends 8-bit
         // channels with a truncated 8-bit factor and rounds the result up.
-        float fog = clamp(floor(v_fog / v_color_w), 0.0, 255.0);
+        float fog = clamp(floor(v_fog), 0.0, 255.0);
         vec3 rgb = floor(c.rgb * 255.0 + 0.5);
         c.rgb = floor((rgb * fog + u_fog_color * (255.0 - fog) + 255.0) / 256.0) / 255.0;
     }

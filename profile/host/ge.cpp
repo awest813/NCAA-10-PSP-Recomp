@@ -71,13 +71,18 @@ inline std::uint32_t decode16(std::uint32_t v, std::uint32_t format) {
 
 inline float clamp255(float v) { return v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v); }
 
+// GE texture rows are 16-byte aligned; low stride bits are ignored, and
+// an encoded zero/short row selects the minimum row for that texel format.
+std::uint32_t texture_row_width(std::uint32_t format, std::uint32_t encoded) {
+    constexpr unsigned bits[] = {16,16,16,32,4,8,16,32,4,8,8};
+    if (format >= std::size(bits)) return std::max(encoded & 0x7FFu,1u);
+    const unsigned alignment = 128u / bits[format];
+    const unsigned width = (encoded & 0x7FFu) & ~(alignment - 1u);
+    return width == 0u ? alignment : width;
+}
+
 float interpolated_byte(float value) {
-    value = clamp255(value);
-    const float base = std::floor(value), fraction = value - base;
-    // Match nearest-even color interpolation without depending on the host
-    // thread's floating-point rounding mode. Texture/blend divisions truncate
-    // later, after this stage has produced byte channels.
-    return base + (fraction > 0.5f || (fraction == 0.5f && (static_cast<unsigned>(base) & 1u)) ? 1.0f : 0.0f);
+    return std::floor(clamp255(value));
 }
 
 float fog_factor(float value) {
@@ -785,8 +790,8 @@ Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
 
 Ge::Vertex Ge::to_raster(const ClipVertex &cv) const {
     Vertex v = to_screen(cv);
-    // Retain GE subpixels before interpolation. Through coordinates truncate;
-    // transformed coordinates advance a subpixel at the studied .625 boundary.
+    // Retain subpixels before interpolation. The transformed viewport is still
+    // a float approximation; exact GE float24 transform/plane setup is separate.
     const float bias = layout_.through ? 0.0f : 0.375f;
     v.x = std::trunc(v.x * 16.0f + bias) / 16.0f;
     v.y = std::trunc(v.y * 16.0f + bias) / 16.0f;
@@ -949,9 +954,7 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
             scratch_inside_[i] = inside ? 1u : 0u;
             if (!inside) continue;
             const Vertex v = to_raster(cv);
-            // Translate by one GE subpixel so GL's half-pixel center samples
-            // the triangle at 7/16. Rectangles/line cells keep their own path.
-            scratch_screen_[i] = GlVertex{v.x + 0.0625f, v.y + 0.0625f, v.z, v.w, v.u, v.v,
+            scratch_screen_[i] = GlVertex{v.x, v.y, v.z, v.w, v.u, v.v,
                                           static_cast<std::uint8_t>(clamp255(v.r)), static_cast<std::uint8_t>(clamp255(v.g)),
                                           static_cast<std::uint8_t>(clamp255(v.b)), static_cast<std::uint8_t>(clamp255(v.a)),
                                           static_cast<std::uint8_t>(clamp255(v.sr)), static_cast<std::uint8_t>(clamp255(v.sg)),
@@ -1105,8 +1108,11 @@ bool Ge::try_rectangle(const ClipVertex &a, const ClipVertex &b, const ClipVerte
         if (tl.u != bl.u || tr.u != br.u || tl.v != tr.v || bl.v != br.v) return false;
         if (!strip && (!(tl.u < br.u) || !(tl.v < br.v))) return false;
     }
-    // Rectangles keep half-pixel UV sampling; triangles use the 7/16 center.
-    // Exact attribute checks avoid changing gradients or perspective mapping.
+    // Triangles have distinct UV planes. Keep scaled, filtered and transformed
+    // textures as triangles even when their corner attributes form a rectangle.
+    if (ps_.texture && (!layout_.through || (regs_[0xC6] & 0x101u) != 0u ||
+        std::abs(br.u-tl.u) != x1-x0 || std::abs(br.v-tl.v) != y1-y0)) return false;
+    if (x0-std::floor(x0) == 9.0f/16.0f) return false;
     emit_sprite(tl,br);
     return true;
 }
@@ -1311,9 +1317,9 @@ void Ge::raster_triangle(const Vertex &a, const Vertex &b, const Vertex &c) {
     const float iwa = 1.0f / a.w, iwb = 1.0f / b.w, iwc = 1.0f / c.w;
 
     for (int y = min_y; y <= max_y; ++y) {
-        const float py = static_cast<float>(y) + 0.4375f;
+        const float py = static_cast<float>(y) + 0.5f;
         for (int x = min_x; x <= max_x; ++x) {
-            const float px = static_cast<float>(x) + 0.4375f;
+            const float px = static_cast<float>(x) + 0.5f;
             float w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * inv_area;
             float w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * inv_area;
             float w2 = 1.0f - w0 - w1;
@@ -1499,7 +1505,10 @@ void Ge::shade_pixel(int x, int y, float z, float u, float v, float r, float g, 
             break;
         }
     }
-    color[0] += interpolated_byte(sr); color[1] += interpolated_byte(sg); color[2] += interpolated_byte(sb);
+    const float secondary_scale = p.texture && p.tex_double ? 2.0f : 1.0f;
+    color[0] += interpolated_byte(sr) * secondary_scale;
+    color[1] += interpolated_byte(sg) * secondary_scale;
+    color[2] += interpolated_byte(sb) * secondary_scale;
     for (float &channel : color) channel = clamp255(channel);
 
     if (p.alpha_test && !compare(p.alpha_func, static_cast<std::uint32_t>(color[3]) & p.alpha_mask, p.alpha_ref)) return;
@@ -1626,7 +1635,7 @@ void Ge::bind_texture() {
     const std::uint32_t address = (regs_[kTexAddr0] & 0xFFFFF0u) | ((regs_[kTexBufWidth0] & 0x0F0000u) << 8u);
     const std::uint32_t width = 1u << std::min(regs_[kTexSize0] & 0xFu, 9u);
     const std::uint32_t height = 1u << std::min((regs_[kTexSize0] >> 8u) & 0xFu, 9u);
-    const std::uint32_t buf_width = std::max(regs_[kTexBufWidth0] & 0x7FFu, 1u);
+    const std::uint32_t buf_width = texture_row_width(format,regs_[kTexBufWidth0]);
     const bool clut = format >= 4u && format <= 7u;
     TextureKey key{address, format, width, height, buf_width, regs_[kTexMode] & 1u,
                    clut ? regs_[kClutFormat] : 0u, clut ? clut_hash_ : 0u};
@@ -1643,7 +1652,7 @@ void Ge::bind_texture() {
         addresses[level] = (regs_[kTexAddr0 + level] & 0xFFFFF0u) | ((regs_[kTexBufWidth0 + level] & 0x0F0000u) << 8u);
         widths[level] = 1u << std::min(regs_[kTexSize0 + level] & 0xFu, 9u);
         heights[level] = 1u << std::min((regs_[kTexSize0 + level] >> 8u) & 0xFu, 9u);
-        strides[level] = std::max(regs_[kTexBufWidth0 + level] & 0x7FFu, 1u);
+        strides[level] = texture_row_width(format,regs_[kTexBufWidth0 + level]);
         if (level && (widths[level] != std::max(width >> level, 1u) ||
                       heights[level] != std::max(height >> level, 1u))) break;
         lengths[level] = texture_bytes(format, strides[level], heights[level]);
@@ -1830,7 +1839,7 @@ std::uint32_t Ge::clut_lookup(std::uint32_t index, unsigned level) const {
 std::uint32_t Ge::fetch_texel(int x, int y, unsigned level) const {
     const std::uint32_t format = regs_[kTexFormat] & 0xFu;
     const std::uint32_t address = (regs_[kTexAddr0 + level] & 0xFFFFF0u) | ((regs_[kTexBufWidth0 + level] & 0x0F0000u) << 8u);
-    const std::uint32_t buf_width = std::max(regs_[kTexBufWidth0 + level] & 0x7FFu, 1u);
+    const std::uint32_t buf_width = texture_row_width(format,regs_[kTexBufWidth0 + level]);
     const auto ux = static_cast<std::uint32_t>(x), uy = static_cast<std::uint32_t>(y);
 
     if (format >= 8u) { // DXT1/3/5: 4x4 blocks
@@ -2062,7 +2071,7 @@ void Ge::submit_gl_state() {
         st.lod_slope = cmd_float(regs_[0xD0]);
         const std::uint32_t address = (regs_[kTexAddr0] & 0xFFFFF0u) | ((regs_[kTexBufWidth0] & 0x0F0000u) << 8u);
         const std::uint32_t format = regs_[kTexFormat] & 0xFu;
-        const std::uint32_t buf_width = regs_[kTexBufWidth0] & 0x7FFu;
+        const std::uint32_t buf_width = texture_row_width(format,regs_[kTexBufWidth0]);
         if (format <= 3u && ((regs_[0xC6] & 4u) == 0u || ((regs_[kTexMode] >> 16u) & 7u) == 0u) &&
             gl_->is_gpu_target(address, format, buf_width)) {
             st.tex_from_target = true;
@@ -2100,7 +2109,7 @@ void Ge::emit_triangle(const Vertex &a, const Vertex &b, const Vertex &c) {
     const bool flat = (regs_[kShadeMode] & 1u) == 0u;
     auto convert = [&](const Vertex &v) {
         const Vertex &col = flat ? c : v;
-        return GlVertex{v.x + 0.0625f, v.y + 0.0625f, v.z, v.w, v.u, v.v,
+        return GlVertex{v.x, v.y, v.z, v.w, v.u, v.v,
                         static_cast<std::uint8_t>(clamp255(col.r)), static_cast<std::uint8_t>(clamp255(col.g)),
                         static_cast<std::uint8_t>(clamp255(col.b)), static_cast<std::uint8_t>(clamp255(col.a)),
                         static_cast<std::uint8_t>(clamp255(col.sr)), static_cast<std::uint8_t>(clamp255(col.sg)),

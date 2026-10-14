@@ -46,6 +46,123 @@ void expect_pixel(psprecomp::GuestMemory &memory, pspweb::GeGl *gl, std::uint32_
     assert(matches);
 }
 
+void texture_row_alignment(bool use_gl) {
+    std::cout << "GE texture row alignment: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory; pspweb::GeGl gl(memory); pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    constexpr unsigned texture=vertices+0x2000, clut=texture+0x4000;
+    constexpr std::array<unsigned,11> minimum={8,8,8,4,32,16,8,4,32,16,16};
+    for (unsigned i=0;i<8;++i) memory.store32(clut+i*4,i==1?0xFF0000FF:i==2?0xFFFF0000:0xFF000000);
+    for (unsigned format=0;format<11;++format) for (unsigned test=0;test<4;++test) {
+        const unsigned row=minimum[format]*(test==3?2:1);
+        const std::array<unsigned,4> encoded={0,minimum[format]-1,minimum[format]+1,2*minimum[format]+1};
+        if (format<8) {
+            auto pixel=[&](unsigned i,bool red) {
+                switch (format) {
+                case 0:memory.store16(texture+i*2,red?0x001F:0xF800);break;
+                case 1:memory.store16(texture+i*2,red?0x801F:0xFC00);break;
+                case 2:memory.store16(texture+i*2,red?0xF00F:0xFF00);break;
+                case 3:memory.store32(texture+i*4,red?0xFF0000FF:0xFFFF0000);break;
+                case 4: {
+                    const unsigned address=texture+i/2, shift=(i%2)*4;
+                    memory.store8(address,(memory.load8(address)&~(15u<<shift))|((red?1u:2u)<<shift));break;
+                }
+                case 5:memory.store8(texture+i,red?1:2);break;
+                case 6:memory.store16(texture+i*2,red?1:2);break;
+                case 7:memory.store32(texture+i*4,red?1:2);break;
+                }
+            };
+            for (unsigned i=0;i<row*2;++i) pixel(i,false);
+            pixel(row,true);
+        } else {
+            const unsigned block_bytes=format==8?8:16, blocks=row/4;
+            for (unsigned i=0;i<blocks*2;++i) {
+                const unsigned address=texture+i*block_bytes;
+                memory.store32(address,0); memory.store16(address+4,i==blocks?0xF800:0x001F); memory.store16(address+6,0);
+                if (format==9) {memory.store32(address+8,0xFFFFFFFF);memory.store32(address+12,0xFFFFFFFF);}
+                if (format==10) {memory.store32(address+8,0);memory.store16(address+12,0);memory.store8(address+14,255);memory.store8(address+15,255);}
+            }
+        }
+        ge.next_frame(); // Exercise revalidation when row padding/content changes.
+        const std::array<float,10> data={.5f,format<8?1.5f:4.5f,24,24,0,.5f,format<8?1.5f:4.5f,40,40,0};
+        for (unsigned i=0;i<data.size();++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(data[i]));
+        DisplayList dl(memory);
+        dl.command(0x9C,0);dl.command(0x9D,64);dl.command(0xD2,3);dl.command(0xD4,0);dl.command(0xD5,63|(63<<10));
+        dl.command(0x12,3u|(3u<<7)|(1u<<23));dl.command(0x1E,1);dl.command(0xD3,0);dl.command(0x21,0);dl.command(0x22,0);
+        dl.command(0xA0,texture&0xFFFFFF);dl.command(0xA8,0x080000|encoded[test]);dl.command(0xB8,format<8?0x101:0x302);
+        dl.command(0xC2,0);dl.command(0xC3,format);dl.command(0xC6,0);dl.command(0xC7,0x101);dl.command(0xC8,1);dl.command(0xC9,0x103);
+        if (format>=4 && format<=7) {dl.command(0xB0,clut&0xFFFFFF);dl.command(0xB1,0x080000);dl.command(0xC5,0xFF03);dl.command(0xC4,1);}
+        const auto downloads=gl.downloads();dl.draw(6,2);dl.run(ge);
+        if (use_gl) {gl.flush();assert(gl.downloads()==downloads);}
+        expect_pixel(memory,use_gl?&gl:nullptr,255);
+    }
+}
+
+void staged_bilinear_precision() {
+    std::cout << "GE staged bilinear truncation: GLES3" << std::endl;
+    psprecomp::GuestMemory memory; pspweb::GeGl gl(memory); pspweb::Ge ge(memory);
+    assert(gl.init());ge.set_gl(&gl);
+    constexpr unsigned texture=vertices+0x2000;
+    const std::array<unsigned,4> colors={0x1E0A141E,0x1F0B151F,0x1F0B151F,0x200C1620};
+    for (unsigned i=0;i<4;++i) memory.store32(texture+((i/2)*4+i%2)*4,colors[i]);
+    auto clear=[&](unsigned offset,unsigned color,float x,float y,float end_x,float end_y) {
+        const std::array<float,6> data={x,y,0,end_x,end_y,0};
+        for (unsigned i=0;i<data.size();++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(data[i]));
+        DisplayList dl(memory);dl.command(0x9C,offset);dl.command(0x9D,64);dl.command(0xD2,3);
+        dl.command(0xD4,0);dl.command(0xD5,63|(63<<10));dl.command(0x12,(3u<<7)|(1u<<23));
+        dl.command(0x1E,0);dl.command(0x21,0);dl.command(0x22,0);dl.command(0x24,0);dl.command(0xD3,0x301);
+        dl.command(0x55,color&0xFFFFFF);dl.command(0x58,color>>24);dl.draw(6,2);dl.run(ge);
+    };
+    for (int scale:{1,2}) for (bool gpu_source:{false,true}) {
+        assert(gl.set_render_scale(scale)==scale);
+        if (gpu_source) for (unsigned i=0;i<4;++i)
+            clear(0,colors[i],8+(i%2),8+(i/2),9+(i%2),9+(i/2));
+        clear(0x60000,0xFFFF00FF,24,24,40,40);
+        const unsigned source=gpu_source?0x04000000+(8*64+8)*4:texture;
+        // At 2x a GPU window retains physical taps; choose the same four weights.
+        const float uv=1.0f;
+        const std::array<float,10> data={uv,uv,24,24,0,uv,uv,40,40,0};
+        for (unsigned i=0;i<data.size();++i) memory.store32(vertices+i*4,std::bit_cast<unsigned>(data[i]));
+        DisplayList dl(memory);dl.command(0xD3,0);dl.command(0x12,3u|(3u<<7)|(1u<<23));dl.command(0x1E,1);
+        // Encoded GPU stride 65 must alias the existing 64-pixel GPU surface.
+        dl.command(0xA0,source&0xFFFFFF);dl.command(0xA8,gpu_source?0x040041:0x080004);dl.command(0xB8,0x101);
+        dl.command(0xC2,0);dl.command(0xC3,3);dl.command(0xC6,0x101);dl.command(0xC7,0x101);dl.command(0xC8,1);dl.command(0xC9,0x103);
+        dl.command(0x22,1);dl.command(0xDB,2|(30<<8)|0xFF0000);
+        const auto downloads=gl.downloads();dl.draw(6,2);dl.run(ge);gl.flush();assert(gl.downloads()==downloads);
+        // Horizontal averages 30.5/31.5 truncate to 30/31, then to 30 vertically.
+        // Combining all four products would yield alpha/RGB 31 and fail the test.
+        expect_pixel(memory,&gl,0x0A141E,0,0x04060000+(32*64+32)*4);
+    }
+}
+
+void affine_color_perspective_uv() {
+    std::cout << "Affine color and explicit perspective UV: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;pspweb::GeGl gl(memory);assert(gl.init());
+    pspweb::GlDrawState state{};state.fb_stride=64;state.fb_format=3;state.sx2=state.sy2=63;
+    gl.set_state(state);
+    auto vertex=[](float x,float y,float w,float u,float v) {
+        pspweb::GlVertex p{};p.x=x;p.y=y;p.w=w;p.u=u;p.v=v;p.r=41;p.g=73;p.b=109;p.a=255;return p;
+    };
+    const auto a=vertex(8,8,1.3f,0,0),b=vertex(16,8,3.7f,8,0),c=vertex(8,16,9.1f,0,8);
+    gl.triangle(a,b,c);gl.flush();assert(gl.downloads()==0);
+    for (unsigned y=8;y<15;++y) for (unsigned x=8;x+y<23;++x)
+        expect_pixel(memory,&gl,0x6D4929,0,0x04000000+(y*64+x)*4);
+    std::array<unsigned,64> texels{};
+    for (unsigned y=0;y<8;++y) for (unsigned x=0;x<8;++x) texels[y*8+x]=0xFF000000|(x*30)|((y*30)<<8);
+    state.texture=true;state.tex_func=3;state.tex_alpha=true;state.texels=texels.data();state.texture_identity=texels.data();
+    state.tex_width=state.tex_height=8;state.lod_mode=1;gl.set_state(state);
+    gl.triangle(vertex(8,8,1,0,0),vertex(16,8,2,8,0),vertex(8,16,4,0,8));
+    expect_pixel(memory,&gl,0x001E3C,0,0x04000000+(10*64+10)*4);
+    // Texture color doubling includes secondary light, but is inactive when
+    // texturing is disabled even if the previous texture state enabled it.
+    texels[0]=0xFF000001;state.tex_width=state.tex_height=1;state.texture_hash=1;state.tex_double=true;gl.set_state(state);
+    auto specular=[&](float x,float y) {auto p=vertex(x,y,1,0,0);p.r=p.g=p.b=0;p.sr=8;return p;};
+    gl.triangle(specular(8,8),specular(16,8),specular(8,16));
+    expect_pixel(memory,&gl,18,0,0x04000000+(10*64+10)*4);
+    state.texture=false;gl.set_state(state);gl.triangle(specular(8,8),specular(16,8),specular(8,16));
+    expect_pixel(memory,&gl,8,0,0x04000000+(10*64+10)*4);
+}
+
 void triangle_sampling(bool use_gl) {
     std::cout << "Triangle grid/center and rectangle sampling: " << (use_gl ? "GLES3" : "software") << std::endl;
     psprecomp::GuestMemory memory;
@@ -76,19 +193,19 @@ void triangle_sampling(bool use_gl) {
         dl.command(0xD3,0); dl.command(0x12,(7u<<2)|(3u<<7)|(1u<<23)); dl.command(0x50,1);
         const auto downloads=gl.downloads(); dl.draw(3,3); dl.run(ge);
         if (use_gl) { gl.flush(); assert(gl.downloads()==downloads); }
-        // roundEven(255 * .4375 / 8) = 14; one subpixel moves it to 12.
-        expect_pixel(memory,use_gl?&gl:nullptr,offset==.0625f?12:14,0,0x04000000+(8*64+8)*4);
+        // Hardware oracle: floor(255 * .5 / 8) = 15; one subpixel gives 13.
+        expect_pixel(memory,use_gl?&gl:nullptr,offset==.0625f?13:15,0,0x04000000+(8*64+8)*4);
     }
     // Flat axis-aligned strips/fans retain rectangle half-pixel UV sampling.
-    // The boundary u=1 selects texel 1; a triangle at 7/16 selects texel 0.
+    // The half-pixel sample u=1 selects texel 1 in this exact-power-of-two fixture.
     constexpr unsigned texture=vertices+0x1000;
     for (unsigned x=0;x<8;++x) memory.store32(texture+x*4,0xFF000000|x*30);
     for (unsigned test : {0u,1u,2u,3u}) {
         const unsigned primitive = test == 1 || test == 2 ? 5u : 4u;
-        const bool rectangle = test != 2;
+        const bool rectangle = test == 1 || test == 3;
         clear();
         const std::array<std::array<float,5>,4> corners={{{.5f,.5f,8,8,0},{8.5f,.5f,16,8,0},
-                                                       {.5f,test==1?8.5f:.5f,8,16,0},{8.5f,test==1?8.5f:.5f,16,16,0}}};
+                                                       {.5f,test==1||test==3?8.5f:.5f,8,16,0},{8.5f,test==1||test==3?8.5f:.5f,16,16,0}}};
         const std::array<unsigned,4> order=primitive==4?std::array<unsigned,4>{0,1,2,3}:std::array<unsigned,4>{0,1,3,2};
         for (unsigned i=0;i<4;++i) for (unsigned j=0;j<5;++j)
             memory.store32(vertices+(i*5+j)*4,std::bit_cast<unsigned>(corners[order[i]][j]));
@@ -107,7 +224,7 @@ void triangle_sampling(bool use_gl) {
         // A constant-V fan is conservatively declined; indexed/reversed strips
         // and a fan with separable positive UV ranges use the rectangle path.
         assert(ge.stats().sprites==before+(rectangle?1u:0u));
-        expect_pixel(memory,use_gl?&gl:nullptr,rectangle?30:0,0,0x04000000+(8*64+8)*4);
+        expect_pixel(memory,use_gl?&gl:nullptr,30,0,0x04000000+(8*64+8)*4);
     }
     // Four corners alone do not make a rectangle: the shared edge must be a
     // diagonal. This strip has a gap above and two overlapping triangles below.
@@ -1244,31 +1361,29 @@ void interpolated_color_precision(bool use_gl) {
         dl.command(0xDF, 2 | (3 << 4));
         dl.command(0xA0, texture & 0xFFFFFF); dl.command(0xA8, 0x080001); dl.command(0xB8, 0);
         dl.command(0xC2, 0); dl.command(0xC3, 3); dl.command(0xC6, 0); dl.command(0xC9, 0x100);
-        dl.command(0x22, alpha_gradient ? 1 : 0); dl.command(0xDB, 2 | (47 << 8) | 0xFF0000);
+        dl.command(0x22, alpha_gradient ? 1 : 0); dl.command(0xDB, 2 | (46 << 8) | 0xFF0000);
         dl.draw(4, 4); dl.run(ge);
-        // At the triangle's 7/16 center, 70 - 43*(145.4375/272) rounds to 47.
-        const unsigned expected = alpha_gradient && !blended ? 0xFFFFFF : 0x2F2F2F;
+        // Hardware floor: 70 - 43*(145.5/272) = 46.998..., truncated to 46.
+        const unsigned expected = alpha_gradient && !blended ? 0xFFFFFF : 0x2E2E2E;
         expect_pixel(memory, use_gl ? &gl : nullptr, expected, 0, 0x04000000 + (145 * 64 + 24) * 4);
     }
-    // Exact half-way values round to even: 6.5 -> 6, 7.5 -> 8, 8.5 -> 8.
-    // Alpha 7.5 must become 8 before the alpha test as well.
+    // GE channels truncate: 6.5 -> 6, 7.5 -> 7, 8.5 -> 8.
+    // Alpha 7.5 must become 7 before the alpha test as well.
     const std::array<Vertex, 4> ties = {{{0x06070605, 0, 0, 0}, {0x0A0B0A09, 4, 0, 0},
                                        {0x06070605, 0, 64, 0}, {0x0A0B0A09, 4, 64, 0}}};
     for (unsigned i = 0; i < ties.size(); ++i) {
         const auto address = vertices + i * 16;
         memory.store32(address, ties[i].rgba);
-        // Move the origin by one subpixel to retain exact .5 color ties at
-        // the GE's 7/16 center rather than the host GL half-pixel center.
-        memory.store32(address + 4, std::bit_cast<unsigned>(ties[i].x - .0625f));
+        memory.store32(address + 4, std::bit_cast<unsigned>(ties[i].x));
         memory.store32(address + 8, std::bit_cast<unsigned>(ties[i].y)); memory.store32(address + 12, 0);
     }
     DisplayList tied(memory);
     tied.command(0x12, (7 << 2) | (3 << 7) | (1 << 23)); tied.command(0x1E, 0);
     tied.command(0x21, 1); tied.command(0xDF, 10 | (10 << 4));
     tied.command(0xE0, 0xFFFFFF); tied.command(0xE1, 0); tied.command(0x22, 1);
-    tied.command(0xDB, 2 | (8 << 8) | 0xFF0000);
+    tied.command(0xDB, 2 | (7 << 8) | 0xFF0000);
     tied.draw(4, 4); tied.run(ge);
-    expect_pixel(memory, use_gl ? &gl : nullptr, 0x080806, 0, 0x04000000 + (32 * 64 + 1) * 4);
+    expect_pixel(memory, use_gl ? &gl : nullptr, 0x080706, 0, 0x04000000 + (32 * 64 + 1) * 4);
 }
 
 void interpolated_secondary_precision() {
@@ -1289,7 +1404,7 @@ void interpolated_secondary_precision() {
     const auto c = vertex(0, 64, 5, 6, 7), d = vertex(4, 64, 9, 10, 11);
     gl.triangle(a, b, c); gl.triangle(b, d, c); gl.flush();
     assert(gl.downloads() == 0);
-    expect_pixel(memory, &gl, 0x080806, 0, 0x04000000 + (32 * 64 + 1) * 4);
+    expect_pixel(memory, &gl, 0x080706, 0, 0x04000000 + (32 * 64 + 1) * 4);
     // Vertex-only changes must toggle the zero-secondary fast path even when
     // every draw-state register is unchanged.
     auto plain = [](pspweb::GlVertex v) {
@@ -1299,7 +1414,7 @@ void interpolated_secondary_precision() {
     gl.triangle(plain(a), plain(b), plain(c)); gl.triangle(plain(b), plain(d), plain(c));
     expect_pixel(memory, &gl, 0x131211, 0, 0x04000000 + (32 * 64 + 1) * 4);
     gl.triangle(a, b, c); gl.triangle(b, d, c);
-    expect_pixel(memory, &gl, 0x080806, 0, 0x04000000 + (32 * 64 + 1) * 4);
+    expect_pixel(memory, &gl, 0x080706, 0, 0x04000000 + (32 * 64 + 1) * 4);
 }
 
 void texture_function_precision(bool use_gl) {
@@ -1665,13 +1780,14 @@ void decoded_filter_precision() {
     assert(gl.init()); ge.set_gl(&gl);
     constexpr unsigned texture = vertices + 0x1000;
     const std::array<unsigned, 4> texels = {0x0D110503, 0xF1CD9565, 0x257F3B1F, 0xAD2BD3EF};
-    for (unsigned i = 0; i < texels.size(); ++i) memory.store32(texture + i * 4, texels[i]);
+    // RGBA8888 rows have a four-texel minimum even when the encoded width is 2.
+    for (unsigned i = 0; i < texels.size(); ++i) memory.store32(texture + ((i / 2) * 4 + i % 2) * 4, texels[i]);
     memory.store32(texture + 32, 0xFFFFFFFF);
     struct Case { float u, v; bool linear, clamp; unsigned rgb, alpha; };
     const std::array<Case, 7> cases = {{
         {.75f, .75f, true, false, 0x4A3729, 70},
         {.8f, .9f, true, false, 0x4F3E30, 70},
-        {-65.0f / 1024, .75f, true, false, 0x706450, 134},
+        {-65.0f / 1024, .75f, true, false, 0x6F6450, 134},
         {-1.0f / 1024, .5f, false, false, 0x110503, 13},
         {-65.0f / 1024, .75f, true, true, 0x2C120A, 19},
         {1025.0f / 1024, .5f, false, false, 0xCD9565, 241},
@@ -1722,10 +1838,10 @@ void surface_filter_precision() {
     // The four source pixels occupy a 2x2 window inside a larger GPU surface.
     // Expected bytes include each source format's RGB and stencil precision.
     const std::array<std::array<unsigned, 7>, 4> expected = {{
-        {0xFF493626, 0xFF4E3C2C, 0xFF6F644E, 0xFF100400, 0xFF2A1106, 0xFFCE9663, 0xFF493626},
-        {0x3F493326, 0x3F4E3B2C, 0x8F6F624E, 0x00100000, 0x002A0E06, 0xFFCE9463, 0x3F493326},
-        {0x40483425, 0x414C3A2B, 0x876D654E, 0x00110000, 0x082A0C04, 0xFFCC9966, 0x40483425},
-        {0x464A3729, 0x464F3E30, 0x86706450, 0x0D110503, 0x132C120A, 0xF1CD9565, 0x464A3729},
+        {0xFF483525, 0xFF4D3C2B, 0xFF6E644D, 0xFF100400, 0xFF2A1106, 0xFFCE9663, 0xFF483525},
+        {0x3F483325, 0x3F4D3B2B, 0x8F6E624D, 0x00100000, 0x002A0E06, 0xFFCE9463, 0x3F483325},
+        {0x40473324, 0x404B3A2A, 0x866D654E, 0x00110000, 0x082A0C04, 0xFFCC9966, 0x40473324},
+        {0x464A3729, 0x464F3E30, 0x866F6450, 0x0D110503, 0x132C120A, 0xF1CD9565, 0x464A3729},
     }};
     struct Case { float u, v; bool linear, clamp; };
     const std::array<Case, 7> cases = {{{.75f, .75f, true, false}, {.8f, .9f, true, false},
@@ -1864,9 +1980,7 @@ void surface_filter_scale_and_lod() {
                                          {0xFF000000, 8, 11, 0}, {0xFF000010, 9, 11, 0}}};
     for (unsigned i = 0; i < source.size(); ++i) {
         memory.store32(vertices + i * 16, source[i].rgba);
-        // Keep this filtering fixture's physical source samples at 4 and 12
-        // after adopting the triangle center; coverage has separate tests.
-        memory.store32(vertices + i * 16 + 4, std::bit_cast<unsigned>(source[i].x - .0625f));
+        memory.store32(vertices + i * 16 + 4, std::bit_cast<unsigned>(source[i].x));
         memory.store32(vertices + i * 16 + 8, std::bit_cast<unsigned>(source[i].y));
         memory.store32(vertices + i * 16 + 12, 0);
     }
@@ -2063,6 +2177,7 @@ struct GlContext {
 };
 }
 int main() {
+    texture_row_alignment(false);
     triangle_sampling(false);
     line_coverage(false);
     line_attributes(false);
@@ -2079,6 +2194,9 @@ int main() {
     interpolated_color_precision(false);
     texture_function_precision(false);
     GlContext context;
+    texture_row_alignment(true);
+    staged_bilinear_precision();
+    affine_color_perspective_uv();
     triangle_sampling(true);
     line_coverage(true);
     line_attributes(true);

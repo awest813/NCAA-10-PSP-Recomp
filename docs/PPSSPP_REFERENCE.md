@@ -1,6 +1,39 @@
 # PPSSPP reference evidence
 
-## Current triangle-grid and rectangle-sampling evidence (2026-10-14)
+## Current hardware-tested software oracle (2026-10-14)
+
+Current [GE arithmetic](https://www.ppsspp.org/docs/psp-hardware/gpu/arithmetic/) and [raster pipeline](https://www.ppsspp.org/docs/psp-hardware/gpu/raster-pipeline/) documentation describes PSP hardware measurements that the older release renderer did not implement: half-pixel coverage, fixed-point planes, floored channels and two separately truncated bilinear stages. The old 7/16/nearest-even comparisons remain historical evidence for that release, rather than current accuracy acceptance. The new oracle is official [CI run 38562253856](https://github.com/hrydgard/ppsspp/actions/runs/38562253856), pinned to [61e60ee6ff](https://github.com/hrydgard/ppsspp/tree/61e60ee6ff650e6fa2ff9b0019bc9fbb652d7fcb). Its GEMath tests pass. This is indirect hardware evidence, with physical PSP frame agreement still required for a broad accuracy claim.
+
+The Windows x64 CI artifact SHA-256 is `6544694391d08a140cd5b8bc61e4c7d25a2bade65e5b6de865aece2a1abcbb7b`. The verified **headless** executable SHA-256 is `3e11ff7b6bfebc0a6fb27e5665c7b7c2b5a53a8ebb28ea6412929a51c37f39a0`. Its version is `v1.20.4-3060-g61e60ee6ff`. Relevant source files also match pinned master `400a97f0ad6f3c92e75973bb862395a0edc05fbf`. Source/binary manifests stay in `build/reference-hardware-20261014`; reference GPL source was inspected locally, not copied into the port.
+
+Fourteen complete/prefix scenes each have two identical 1x software headless captures, with original dump hashes recorded. PNGs include a 512-pixel stride; comparisons use the visible 480×272 crop. Their channels exactly represent expanded RGB565. Render-target captures before draws 39/40 repeat identically and reproduce final displayed pixels after the captured dithering and RGB565 packing. Direct packing alone initially failed because it omitted that final dither; corrected before accepting the target captures. All fourteen native RGBA8 presentations match native direct RGB565. Originals and save origins remain intact; modified prefixes remain diagnostics rather than gameplay screenshots.
+
+| New oracle, `93b8d78` → current | Before full RGB MAE | After full RGB MAE | Fixed ROI before → after |
+| --- | --- | --- | --- |
+| SDSU | 0.584081 | **0.426162** | 0.059348 → **0.034486** |
+| GT–Georgia | 0.511813 | **0.316575** | 0.458346 → **0.028872** |
+
+Four early prefixes worsen: 40 **0.150717 → 0.158295**, 45 **0.160498 → 0.184081**, 100 **0.160902 → 0.184546**, 317 **0.790896 → 0.806993**. The other ten cases improve or stay equal. Prefix-40 raw RGB differences grow 25,964 → 27,330, with the current first mismatch at `(0,107)`. These failures expose incomplete float24 transforms and fixed-point UV/attribute planes. The legacy 994-pixel/two-row residual is no longer the primary oracle. Full-frame improvement does not establish complete accuracy; new and legacy MAEs cannot be compared directly.
+
+Independent changes: half-pixel triangle sampling; truncated primary/secondary channels; horizontal then vertical bilinear truncation; texture-doubled secondary color; 16-byte effective texture rows across decoding, cache spans, mips and GPU views; and stricter rectangle conversion. Drawing-space GPU interpolation plus explicit UV/W,Q/W removes an extra varying and keeps constant colors exact without an epsilon. Original sprites/lines retain their incomplete paths; exact float24 row sums/reciprocal, 15-bit UVs, 14-bit plane gradients, diamond/AA lines, negative doubled-inverse blend factors and broader hardware/stencil/mask coverage remain open.
+
+Actual old-source regressions produce blue instead of red for an aligned-row fixture and reject the staged alpha-30 sample. A pinned reference triangle yields red 15, while the earlier release-oriented fixture expected 14. Padded filter literals match pinned headless captures; an initial unpadded 2×2 RGBA fixture exposed the GE's minimum four-texel row rather than filtering. Corrected its layout before using filtering results. New tests cover eleven formats, encoded zero/short/misaligned rows, cache revalidation, staged RGB/alpha, GPU stride aliases without rendering CPU downloads, affine constants, perspective UV and secondary doubling state changes, including 1x/2x GPU cases.
+
+Final native medians are **169.2265 → 169.5785 ms (+0.21%)** / **143.954 → 141.446 ms (−1.74%)**; maximums **297.707 → 292.481** / **157.446 → 160.612 ms**. O3/DNDEBUG ABBA, sixteen frames/run, first two excluded, FrameProfile enabled both. Parser/CPU submission/presentation/GPU completion timed; final readbacks excluded. Repeated hashes match single frames. Final draws/copies/pixels: **1,976 / 916 / 862,031** and **1,920 / 836 / 1,069,091**. See `accepted-performance.json`; these do not establish browser FPS.
+
+Native/web builds, ten native suites, seven source-workflow and eight package cases, syntax and exact NCAA identity pass. Latest package `build/static-ncaa10-hardware-reference` has 14 companions, verified boot data and no ISO. Logs: `build/ncaa-hardware-native-build.log` / `build/ncaa-hardware-web-build.log`. Source capture tooling independently reproduces the reference and passes five provenance/output rejection checks. No browser/GUI reference session or original game/save state was changed; headless children exit after each capture. 64 MiB / 56 MiB and AOT execution remain intact. Browser pacing/audio/gameplay and broader controllers/saves/modes/devices remain required.
+
+### Reproduce a pinned capture
+
+Obtain the Windows x64 artifact from the official pinned CI run and verify its archive digest before extraction. Keep it under ignored `build/`. The original machine can reproduce one scene with:
+
+```powershell
+python scripts/capture_ge_reference.py --emulator build/reference-hardware-20261014/emulator-61e60ee6/PPSSPPHeadless.exe --exe-sha256 3e11ff7b6bfebc0a6fb27e5665c7b7c2b5a53a8ebb28ea6412929a51c37f39a0 --source-commit 61e60ee6ff650e6fa2ff9b0019bc9fbb652d7fcb --dump build/reference-sdsu-day-20261013/ULUS10440_0002.ppdmp --disc-id ULUS10440 --output build/new-reference-check --expect-rgb565
+```
+
+Pillow is required. For another checkout, supply that checkout's own dump/executable paths. The output must be new and under `build/`; two captures, logs, hashes and an isolated memstick are retained. The tool rejects wrong binary hashes, source versions, title IDs, black/mismatched captures and existing/outside output paths. It drives the isolated replay and has no debugger memory/register editing interface; it is never a production CPU fallback.
+
+## Historical legacy-software sampling evidence (2026-10-14)
 
 The earlier global-center trial improved early field draws but worsened complete frames. Re-evaluating it against `c044603` identified a second sampling contract: the studied [triangle rasterizer](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/Rasterizer.cpp) uses 7/16 centers, while its rectangle path samples UV at half pixels. The [transform](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/TransformUnit.cpp) snaps coordinates to the GE grid and recognizes compatible strips/fans through [rectangle detection](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/RasterizerRectangle.cpp). Pinned reference-only downloads/hashes are in `build/reference-sampling-20261014/reference-source/hashes.json`; no reference source was copied into the port.
 

@@ -44,6 +44,8 @@ Preserve line lists/strips and endpoint exclusion: NCAA uses them for field mark
 
 Triangle-grid/center changes must preserve rectangle UV sampling. A global center shift can improve field geometry while breaking UI edges. Rectangle recognition requires compatible attributes, separable UVs and a shared diagonal; four unique corners alone do not prove rectangle topology. Keep complete frames, isolated prefixes, malformed quads, gradients and alpha-blended adjacent primitives in acceptance evidence.
 
+Use the current hardware-tested software oracle pinned in `docs/PPSSPP_REFERENCE.md`, not the older release's 7/16/nearest-even behavior, for new rendering acceptance. Preserve historical captures and label reference version/commit on every metric. Report worsening prefixes/ROIs alongside full-frame wins. The current half-pixel/byte-stage fixes do not establish complete fixed-point GE accuracy. Inspect reference source locally without copying GPL implementation into the port. `scripts/capture_ge_reference.py` uses a hash/version/title-checked headless executable, a fresh build output/memstick and repeated captures; keep it separate from production AOT execution.
+
 ## State and documentation
 
 - Preserve local game files, prior diagnostic captures and save exports. Export/hash saves before replacing fixtures; keep baseline and progressed checkpoints identifiable.
