@@ -245,7 +245,7 @@ private:
     int batch_stencil_value_{-1}; // value a rectangular stencil batch sets everywhere it covers
     GLsizei scratch_width_{}, scratch_height_{};
     GLint u_tex_opaque_{};
-    void apply_state();
+    void apply_state(bool has_secondary);
     // glBlitFramebuffer with the scissor test off and all colour channels on.
     void blit(GLuint from, const GLint src[4], GLuint to, const GLint dst[4], GLbitfield mask);
 
@@ -289,6 +289,7 @@ private:
     GLuint destination_texture_{};
     GLsizei destination_width_{}, destination_height_{};
     GLint u_fog_enable_{}, u_fog_color_{};
+    GLint u_secondary_enable_{};
     GLint u_lod_params_{}, u_lod_limits_{}, u_lod_filter_{};
     GLint u_dither_{}, u_dither_rows_{};
     GLint u_present_tex_{}, u_present_rect_{}, u_present_origin_{};

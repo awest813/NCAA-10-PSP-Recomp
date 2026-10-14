@@ -71,6 +71,15 @@ inline std::uint32_t decode16(std::uint32_t v, std::uint32_t format) {
 
 inline float clamp255(float v) { return v < 0.0f ? 0.0f : (v > 255.0f ? 255.0f : v); }
 
+float interpolated_byte(float value) {
+    value = clamp255(value);
+    const float base = std::floor(value), fraction = value - base;
+    // Match nearest-even color interpolation without depending on the host
+    // thread's floating-point rounding mode. Texture/blend divisions truncate
+    // later, after this stage has produced byte channels.
+    return base + (fraction > 0.5f || (fraction == 0.5f && (static_cast<unsigned>(base) & 1u)) ? 1.0f : 0.0f);
+}
+
 float fog_factor(float value) {
     // Sign also decides nonfinite values: negative NaN/inf fog completely,
     // positive NaN/inf keep the source. Finite factors truncate to 8 bits.
@@ -1248,13 +1257,12 @@ void Ge::shade_pixel(int x, int y, float z, float u, float v, float r, float g, 
         if (!compare(p.z_func, depth, stored)) return;
     }
 
-    float color[4] = {r, g, b, a};
+    float color[4] = {interpolated_byte(r), interpolated_byte(g), interpolated_byte(b), interpolated_byte(a)};
     if (p.texture) {
         float tex[4];
         sample_texture(u, v, tex);
         // Texture functions consume byte colors. Doubling applies before the
         // fixed-point division; alpha is never doubled.
-        for (float &channel : color) channel = std::floor(clamp255(channel));
         const float rgb_scale = p.tex_double ? 2.0f : 1.0f;
         const float alpha = p.tex_alpha ? std::floor((color[3] + 1.0f) * tex[3] / 256.0f) : color[3];
         switch (p.tex_func) {
@@ -1282,7 +1290,7 @@ void Ge::shade_pixel(int x, int y, float z, float u, float v, float r, float g, 
             break;
         }
     }
-    color[0] += sr; color[1] += sg; color[2] += sb;
+    color[0] += interpolated_byte(sr); color[1] += interpolated_byte(sg); color[2] += interpolated_byte(sb);
     for (float &channel : color) channel = clamp255(channel);
 
     if (p.alpha_test && !compare(p.alpha_func, static_cast<std::uint32_t>(color[3]) & p.alpha_mask, p.alpha_ref)) return;

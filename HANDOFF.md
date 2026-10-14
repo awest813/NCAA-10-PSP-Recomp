@@ -18,7 +18,19 @@ This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAs
 
 ## Latest rendering and reference evidence
 
-### Current ordered shader-blend checkpoint (2026-10-14)
+### Current interpolated-color checkpoint (2026-10-14)
+
+The GT pause-menu discrepancy begins in background draw **4093**, before text draw **4100**. The opaque gradient is 70 → 27 over 272 pixels: at `(24,145)`, 46.998 was truncated to 46 while the x64 software reference produces 47. Font draws use nearest filtering with no mip levels. Primary RGBA and secondary RGB now round to nearest-even bytes before texture functions, alpha tests and blending; those later fixed-point divisions still truncate. The pinned x64 rasterizer and optimized pixel path were checked independently. ARM64/generic reference interpolation paths differ, so this is a verified x64-reference match, not complete PSP hardware proof.
+
+Synthetic lists reproduce 46 instead of 47 in both prior backends. New coverage includes RGB/alpha gradients, textured/untextured and blended/unblended paths, exact halfway ties, alpha-test boundaries and secondary colors. A zero-secondary fast path skips unused shader work; vertex-only nonzero → zero → nonzero transitions are tested with unchanged draw state. GPU snapshot/primitive ordering and 64 MiB defaults remain intact.
+
+Full-frame RGB MAE improves SDSU **0.432580 → 0.402295** and GT **1.023075 → 0.883931**. SDSU field ROI remains 0.060150; the GT pause-menu ROI improves **0.487218 → 0**, matching the reference exactly. GT diagnostic prefixes 4094/4100/4101 match that ROI in both pre-conversion RGBA and final RGB565. Earlier GT prefix 4092 slightly worsens **3.440824 → 3.443479** overall; earlier scene accuracy remains open. SDSU prefixes 39/40/45/100/323 are unchanged. Reports/panels: `color-rounding-comparison.json/png`; aggregate, provenance and raw-reference hashes: `build/reference-gt-prefix-20261014/color-rounding-summary.json` and `color-rounding-provenance.json`. Modified prefixes remain diagnostics, not gameplay screenshots; isolated reference closed.
+
+Final O3 ABBA native replay medians versus `0300ab3` are SDSU **168.064 → 168.3595 ms (+0.18%)**, GT **140.333 → 143.5235 ms (+2.27%)**. Maximums are 261.170 → 311.266 ms and 148.060 → 152.189 ms. This includes parser/CPU submission/presentation/GPU completion and excludes final reads; it is not browser FPS. Repeated final images match the single-frame comparisons byte for byte. Draws/copies/area remain 1,982 / 919 / 618,114 pixels and 1,930 / 840 / 833,528 pixels. `color-rounding-final-performance.json` retains samples and limitations; exploratory pre-optimization timing is separate.
+
+Latest package: `build/static-ncaa10-color-rounding-final` (14 companions, verified boot data, no ISO). Final native/web rebuilds, ten native suites, eight package cases, seven source-workflow cases and exact NCAA verification pass. Logs: `build/ncaa-color-rounding-final-native-build.log` and `build/ncaa-color-rounding-final-web-build.log`. Final Wasm contains both byte quantization and the zero-secondary branch. Fresh browser/gameplay/FPS/audio still awaits Chrome app access. Next rendering work: earlier GT/SDSU scene differences, geometry/coverage and fractional sampling, with hardware/alpha/stencil/mask coverage still open. The broader pacing/audio, physical controls, saves/modes/device and original 32 MiB work remains required. AOT execution and 64 MiB / 56 MiB user partition are unchanged.
+
+### Prior ordered shader-blend checkpoint (2026-10-14)
 
 The draw-39 fixture now produces `(114,146,67)` in software/GLES instead of GLES `(114,147,67)`. Both backends truncate separate half-step source/destination products before combining them. GLES uses GPU destination snapshots, then performs dithering, saturation and target RGB packing in the shader. Coverage includes six equations, every factor class and fixed-color aliases, doubled-alpha boundaries, all four target formats and 1x/2x rendering. Reserved equations follow the studied software-reference behavior; this is not hardware proof.
 

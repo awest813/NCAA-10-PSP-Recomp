@@ -1,6 +1,25 @@
 # PPSSPP reference evidence
 
-## Current ordered shader-blend evidence (2026-10-14)
+## Current interpolated-color evidence (2026-10-14)
+
+The first affected menu-text draw is ordinal 4100, but a prefix before it already contains the one-unit error. Background draw 4093 interpolates an opaque gray gradient from 70 to 27 over 272 pixels. At `(24,145)`, the channel is 46.998: the prior renderer stores 46; the reference stores 47. Repeated raw reads agree. The font draws use nearest filtering/no mips, so no sampling change was made for this fix.
+
+Primary RGBA and secondary RGB now round to nearest-even bytes before texture functions, alpha tests and blend products. Later fixed-point divisions retain truncation. This matches the x64 [rasterizer interpolation](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/Rasterizer.cpp); its ARM64/generic paths differ, so hardware/cross-backend equivalence remains unproven. The optimized [pixel blend path](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/DrawPixelX86.cpp) was also checked and retains separate half-step products. Its reference-only local file hash is recorded in `color-rounding-provenance.json`; no reference code was copied into the port.
+
+Synthetic display lists reproduce 46 instead of 47 in both prior backends and now pass RGB/alpha gradients, texture/no-texture, blend/no-blend, exact ties and alpha-test boundaries. A direct backend fixture covers secondary-color rounding. Zero secondary colors skip unused shader work; vertex-only nonzero/zero/nonzero transitions preserve output despite unchanged draw registers. No extra GPU snapshot or CPU readback was added.
+
+| Corrected direct software comparison | Before RGB MAE | After RGB MAE | Fixed ROI before → after |
+| --- | --- | --- | --- |
+| SDSU | 0.432580 | **0.402295** | Field: 0.060150 → 0.060150 |
+| Georgia Tech–Georgia | 1.023075 | **0.883931** | Pause-menu region: 0.487218 → **0** |
+
+The pause ROI is exactly equal in RGB565 and pre-conversion RGBA for GT prefixes 4094, 4100 and 4101. Earlier prefix 4092 worsens slightly from 3.440824 to 3.443479 overall; its fixed ROI is unchanged. Prefix 4094/4100/4101 full-frame error remains 2.696403 because earlier scene differences remain. SDSU prefixes 39/40/45/100/323 are unchanged. All eleven reference-compared RGBA8 presentations equal direct RGB565 readback. `color-rounding-comparison.json/png` retains panels and hashes. Aggregate/provenance live under `build/reference-gt-prefix-20261014`; original data is preserved, modified prefixes are diagnostic only, and the isolated reference was closed.
+
+Final matched O3 ABBA native medians versus `0300ab3` are SDSU 168.064 → 168.3595 ms (+0.18%) and GT 140.333 → 143.5235 ms (+2.27%). Maximums worsen 261.170 → 311.266 ms and 148.060 → 152.189 ms. Each run repeats 16 frames with the first two excluded; timings include the experimental parser/CPU submission/presentation/`glFinish`, excluding final reads. These are not browser FPS. Final repeated raw hashes match single-frame output after the zero-secondary optimization. Copies/pixels/draws are unchanged: SDSU 919 / 618,114 / 1,982; GT 840 / 833,528 / 1,930. See `color-rounding-final-performance.json`; preliminary timing is kept separately rather than mixed with final results.
+
+Latest package: `build/static-ncaa10-color-rounding-final`, with 14 companions, verified boot data and no ISO. Final native/web builds, ten native suites, eight package cases, source-workflow checks and exact NCAA verification pass. Fresh browser gameplay/pacing/audio remains pending app access. Earlier rendering, hardware/alpha/stencil/mask precision, sustained performance and broader mode/controller/save coverage remain open. Default 64 MiB / 56 MiB user partition and AOT execution are unchanged.
+
+## Prior ordered shader-blend evidence (2026-10-14)
 
 The independent draw-39 fixture reproduced GLES `(114,147,67)` instead of reference `(114,146,67)`. The renderer now truncates each half-step fixed-point contribution separately, combines them, then dithers before saturation and target RGB packing. This follows the studied [pixel pipeline](https://github.com/hrydgard/ppsspp/blob/v1.20.4/GPU/Software/DrawPixel.cpp), independently implemented. Software and GLES cover six blend equations, factor classes, fixed-color aliases and doubled-alpha boundaries. Reserved equations match the software reference's fallback, without claiming hardware equivalence.
 

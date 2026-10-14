@@ -49,7 +49,7 @@ void main() {
     // GE colors interpolate in screen space, while UV remains perspective
     // correct. Carry w with the colors to cancel GL's 1/w interpolation.
     v_color = (a_color * 255.0) * w;
-    v_secondary = a_secondary * w;
+    v_secondary = (a_secondary * 255.0) * w;
     v_color_w = w;
     v_lod_w = w * w;
 }
@@ -84,6 +84,7 @@ uniform vec2 u_tex_window; // PSP texture size when sampling part of a larger su
 uniform vec2 u_tex_clamp;  // 1 = clamp, 0 = repeat, per axis
 uniform bool u_tex_opaque; // sampling a 16-bit 565 surface: no alpha
 uniform bool u_fog_enable;
+uniform bool u_secondary_enable;
 uniform vec3 u_fog_color;
 uniform vec3 u_lod_params; // mode, signed bias in levels, slope
 uniform vec3 u_lod_limits; // last uploaded level, mip interpolation, render scale
@@ -222,6 +223,10 @@ void main() {
         o_color = quantize_output(c);
         return;
     }
+    // Interpolated colors become bytes before texture functions, alpha tests
+    // and blending. Those later fixed-point operations still truncate.
+    primary = roundEven(clamp(primary, 0.0, 255.0));
+    c = primary / 255.0;
     if (u_tex_enable) {
         vec2 uv;
         if (v_uv.z > 0.0) uv = v_uv.xy / v_uv.z;
@@ -239,9 +244,7 @@ void main() {
         if (u_tex_opaque) t.a = 1.0;
         // GE texture functions operate on byte channels, before blending or
         // alpha tests. Preserve the division's truncation and double RGB first.
-        // Perspective interpolation can put an exact constant byte a few
-        // float ULPs below its integer. Preserve that byte before truncating.
-        c = floor(clamp(primary, 0.0, 255.0) + 0.0001);
+        c = primary;
         t = floor(t * 255.0 + 0.5);
         float rgb_scale = u_tex_double ? 2.0 : 1.0;
         float alpha = u_tex_alpha ? floor((c.a + 1.0) * t.a / 256.0) : c.a;
@@ -262,7 +265,10 @@ void main() {
         }
         c = clamp(c, 0.0, 255.0) / 255.0;
     }
-    c.rgb = clamp(c.rgb + v_secondary / v_color_w, 0.0, 1.0);
+    if (u_secondary_enable) {
+        vec3 secondary = roundEven(clamp(v_secondary / v_color_w, 0.0, 255.0));
+        c.rgb = clamp(c.rgb + secondary / 255.0, 0.0, 1.0);
+    }
     if (u_alpha_test) {
         int a = int(c.a * 255.0 + 0.5) & u_alpha_mask;
         if (!compare(u_alpha_func, a, u_alpha_ref)) discard;
@@ -271,7 +277,7 @@ void main() {
         // Fog, like color, interpolates in screen space. GE blends 8-bit
         // channels with a truncated 8-bit factor and rounds the result up.
         float fog = clamp(floor(v_fog / v_color_w), 0.0, 255.0);
-        vec3 rgb = floor(c.rgb * 255.0);
+        vec3 rgb = floor(c.rgb * 255.0 + 0.5);
         c.rgb = floor((rgb * fog + u_fog_color * (255.0 - fog) + 255.0) / 256.0) / 255.0;
     }
     if (u_shader_blend) c.rgb = blend_rgb(c);
@@ -623,6 +629,7 @@ bool GeGl::init() {
     u_tex_clamp_ = glGetUniformLocation(program_, "u_tex_clamp");
     u_tex_opaque_ = glGetUniformLocation(program_, "u_tex_opaque");
     u_fog_enable_ = glGetUniformLocation(program_, "u_fog_enable");
+    u_secondary_enable_ = glGetUniformLocation(program_, "u_secondary_enable");
     u_fog_color_ = glGetUniformLocation(program_, "u_fog_color");
     u_lod_params_ = glGetUniformLocation(program_, "u_lod_params");
     u_lod_limits_ = glGetUniformLocation(program_, "u_lod_limits");
@@ -1355,7 +1362,7 @@ void GeGl::forget_texture(const void *identity) {
     textures_.erase(it);
 }
 
-void GeGl::apply_state() {
+void GeGl::apply_state(bool has_secondary) {
     const GlDrawState &s = state_;
     int ox = 0, oy = 0;
     Surface &surface = surface_for_draw(s.fb_offset, s.fb_stride, s.fb_format,
@@ -1430,6 +1437,7 @@ void GeGl::apply_state() {
     set_uniform(u_target_, static_cast<float>(surface.stride), static_cast<float>(surface.height), 0.0f, 2);
     set_uniform(u_origin_, static_cast<float>(ox), static_cast<float>(oy), 0.0f, 2);
     set_uniform_int(u_clear_, s.clear ? 1 : 0);
+    set_uniform_int(u_secondary_enable_, has_secondary ? 1 : 0);
     set_uniform_int(u_shader_blend_, s.blend && !s.clear ? 1 : 0);
     set_uniform_int(u_output_format_, static_cast<int>(s.fb_format));
     set_uniform_int(u_dither_, s.dither ? 1 : 0);
@@ -1706,7 +1714,10 @@ void GeGl::flush() {
         ~FlushTimer() { if (on) total += clock_ms() - start; }
     } flush_timer{flush_ms_, started, timed};
     clear_alpha_ = batch_.front().a;
-    apply_state();
+    const bool has_secondary = std::any_of(batch_.begin(), batch_.end(), [](const GlVertex &v) {
+        return v.sr != 0u || v.sg != 0u || v.sb != 0u;
+    });
+    apply_state(has_secondary);
     auto mark_group = [&](const Rect &drawn) {
         if (current_ == nullptr || drawn.empty()) return;
         mark_drawn(*current_, drawn);
@@ -1750,7 +1761,7 @@ void GeGl::flush() {
         // A previous group may have changed stencil alpha. Applying state again
         // resolves it before destination-alpha sampling and restores any GL
         // state changed by that resolve; depth/stencil stay on the same target.
-        if (group != 0u) apply_state();
+        if (group != 0u) apply_state(has_secondary);
         const Rect drawn = blend_group_bounds_[group].shifted(current_ox_, current_oy_).clip(whole(*current_));
         if (!drawn.empty()) {
             if (reads_destination) snapshot_destination(drawn);

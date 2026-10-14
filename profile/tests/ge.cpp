@@ -915,6 +915,103 @@ void ordered_blend_gpu() {
     }
 }
 
+void interpolated_color_precision(bool use_gl) {
+    std::cout << "Interpolated color precision: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    struct Vertex { unsigned rgba; float x, y, z; };
+    constexpr unsigned texture = vertices + 0x1000;
+    memory.store32(texture, 0xFFFFFFFF);
+    for (bool alpha_gradient : {false, true}) for (bool textured : {false, true}) for (bool blended : {false, true}) {
+        const unsigned top = alpha_gradient ? 0x46FFFFFF : 0xFF464646;
+        const unsigned bottom = alpha_gradient ? 0x1BFFFFFF : 0xFF1B1B1B;
+        const std::array<Vertex, 4> data = {{{top, 0, 0, 0}, {top, 64, 0, 0},
+                                           {bottom, 0, 272, 0}, {bottom, 64, 272, 0}}};
+        const std::array<float, 6> clear_data = {0, 0, 0, 64, 272, 0};
+        for (unsigned i = 0; i < clear_data.size(); ++i)
+            memory.store32(vertices + i * 4, std::bit_cast<unsigned>(clear_data[i]));
+        DisplayList clear(memory);
+        clear.command(0x9C, 0); clear.command(0x9D, 64); clear.command(0xD2, 3);
+        clear.command(0xD4, 0); clear.command(0xD5, 63 | (271 << 10));
+        clear.command(0x12, (3u << 7u) | (1u << 23)); clear.command(0x1E, 0);
+        clear.command(0x21, 0); clear.command(0x22, 0); clear.command(0xD3, 0x301);
+        clear.command(0x55, 0); clear.command(0x58, 0); clear.draw(6, 2); clear.run(ge);
+        for (unsigned i = 0; i < data.size(); ++i) {
+            const unsigned base = vertices + i * (textured ? 24 : 16);
+            if (textured) { memory.store32(base, std::bit_cast<unsigned>(.5f)); memory.store32(base + 4, std::bit_cast<unsigned>(.5f)); }
+            const unsigned pos = base + (textured ? 8 : 0);
+            memory.store32(pos, data[i].rgba);
+            memory.store32(pos + 4, std::bit_cast<unsigned>(data[i].x));
+            memory.store32(pos + 8, std::bit_cast<unsigned>(data[i].y));
+            memory.store32(pos + 12, 0);
+        }
+        DisplayList dl(memory);
+        dl.command(0x9C, 0); dl.command(0x9D, 64); dl.command(0xD2, 3);
+        dl.command(0xD4, 0); dl.command(0xD5, 63 | (271 << 10));
+        dl.command(0x12, (7 << 2) | (3 << 7) | (1 << 23) | (textured ? 3 : 0));
+        dl.command(0x50, 1); dl.command(0x1E, textured ? 1 : 0); dl.command(0x21, blended ? 1 : 0);
+        dl.command(0xD3, 0);
+        dl.command(0xDF, 2 | (3 << 4));
+        dl.command(0xA0, texture & 0xFFFFFF); dl.command(0xA8, 0x080001); dl.command(0xB8, 0);
+        dl.command(0xC2, 0); dl.command(0xC3, 3); dl.command(0xC6, 0); dl.command(0xC9, 0x100);
+        dl.command(0x22, alpha_gradient ? 1 : 0); dl.command(0xDB, 2 | (47 << 8) | 0xFF0000);
+        dl.draw(4, 4); dl.run(ge);
+        // Captured pane gradient: 70 - 43*(145.5/272) = 46.998..., rounded to 47.
+        const unsigned expected = alpha_gradient && !blended ? 0xFFFFFF : 0x2F2F2F;
+        expect_pixel(memory, use_gl ? &gl : nullptr, expected, 0, 0x04000000 + (145 * 64 + 24) * 4);
+    }
+    // Exact half-way values round to even: 6.5 -> 6, 7.5 -> 8, 8.5 -> 8.
+    // Alpha 7.5 must become 8 before the alpha test as well.
+    const std::array<Vertex, 4> ties = {{{0x06070605, 0, 0, 0}, {0x0A0B0A09, 4, 0, 0},
+                                       {0x06070605, 0, 64, 0}, {0x0A0B0A09, 4, 64, 0}}};
+    for (unsigned i = 0; i < ties.size(); ++i) {
+        const auto address = vertices + i * 16;
+        memory.store32(address, ties[i].rgba);
+        memory.store32(address + 4, std::bit_cast<unsigned>(ties[i].x));
+        memory.store32(address + 8, std::bit_cast<unsigned>(ties[i].y)); memory.store32(address + 12, 0);
+    }
+    DisplayList tied(memory);
+    tied.command(0x12, (7 << 2) | (3 << 7) | (1 << 23)); tied.command(0x1E, 0);
+    tied.command(0x21, 1); tied.command(0xDF, 10 | (10 << 4));
+    tied.command(0xE0, 0xFFFFFF); tied.command(0xE1, 0); tied.command(0x22, 1);
+    tied.command(0xDB, 2 | (8 << 8) | 0xFF0000);
+    tied.draw(4, 4); tied.run(ge);
+    expect_pixel(memory, use_gl ? &gl : nullptr, 0x080806, 0, 0x04000000 + (32 * 64 + 1) * 4);
+}
+
+void interpolated_secondary_precision() {
+    std::cout << "Interpolated secondary color: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    assert(gl.init());
+    pspweb::GlDrawState state{};
+    state.fb_stride = 64; state.fb_format = 3; state.sx2 = state.sy2 = 63;
+    state.blend = true; state.src_factor = state.dst_factor = 10; state.fix_a = 0xFFFFFF;
+    gl.set_state(state);
+    auto vertex = [](float x, float y, unsigned r, unsigned g, unsigned b) {
+        pspweb::GlVertex v{}; v.x = x; v.y = y; v.w = 1; v.a = 255;
+        v.sr = static_cast<std::uint8_t>(r); v.sg = static_cast<std::uint8_t>(g); v.sb = static_cast<std::uint8_t>(b);
+        return v;
+    };
+    const auto a = vertex(0, 0, 5, 6, 7), b = vertex(4, 0, 9, 10, 11);
+    const auto c = vertex(0, 64, 5, 6, 7), d = vertex(4, 64, 9, 10, 11);
+    gl.triangle(a, b, c); gl.triangle(b, d, c); gl.flush();
+    assert(gl.downloads() == 0);
+    expect_pixel(memory, &gl, 0x080806, 0, 0x04000000 + (32 * 64 + 1) * 4);
+    // Vertex-only changes must toggle the zero-secondary fast path even when
+    // every draw-state register is unchanged.
+    auto plain = [](pspweb::GlVertex v) {
+        v.sr = v.sg = v.sb = 0; v.r = 17; v.g = 18; v.b = 19;
+        return v;
+    };
+    gl.triangle(plain(a), plain(b), plain(c)); gl.triangle(plain(b), plain(d), plain(c));
+    expect_pixel(memory, &gl, 0x131211, 0, 0x04000000 + (32 * 64 + 1) * 4);
+    gl.triangle(a, b, c); gl.triangle(b, d, c);
+    expect_pixel(memory, &gl, 0x080806, 0, 0x04000000 + (32 * 64 + 1) * 4);
+}
+
 void texture_function_precision(bool use_gl) {
     std::cout << "Texture-function integer precision: " << (use_gl ? "GLES3" : "software") << std::endl;
     psprecomp::GuestMemory memory;
@@ -1439,6 +1536,7 @@ int main() {
     ordered_dither(false);
     rgb565_destination_alpha(false);
     exact_blend_rounding(false);
+    interpolated_color_precision(false);
     texture_function_precision(false);
     GlContext context;
     lighting_colors(true);
@@ -1451,6 +1549,8 @@ int main() {
     ordered_dither(true);
     rgb565_destination_alpha(true);
     exact_blend_rounding(true);
+    interpolated_color_precision(true);
+    interpolated_secondary_precision();
     texture_function_precision(true);
     texture_filters();
     texture_mipmaps();
