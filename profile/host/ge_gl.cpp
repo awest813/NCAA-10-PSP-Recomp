@@ -82,7 +82,7 @@ uniform int u_output_format;
 uniform bool u_clear;
 uniform vec2 u_tex_window; // PSP texture size when sampling part of a larger surface (else 0)
 uniform vec2 u_tex_clamp;  // 1 = clamp, 0 = repeat, per axis
-uniform bool u_tex_opaque; // sampling a 16-bit 565 surface: no alpha
+uniform int u_tex_format; // decoded textures are RGBA8; GPU surfaces retain their guest format
 uniform bool u_fog_enable;
 uniform bool u_secondary_enable;
 uniform vec3 u_fog_color;
@@ -133,13 +133,34 @@ vec4 mip_texel(ivec2 p, int level, ivec2 size) {
     ivec2 wrapped = (p % size + size) % size;
     p.x = u_tex_clamp.x > 0.0 ? clamp(p.x, 0, size.x - 1) : wrapped.x;
     p.y = u_tex_clamp.y > 0.0 ? clamp(p.y, 0, size.y - 1) : wrapped.y;
-    return floor(texelFetch(u_tex, p, level) * 255.0 + 0.5);
+    if (u_tex_window.x > 0.0) {
+        // Each tap wraps/clamps inside the source window, not the containing
+        // surface. Its origin and sample grid scale with the GPU texture.
+        ivec2 physical = textureSize(u_tex, 0);
+        ivec2 scale = max(physical / ivec2(u_tex_size), ivec2(1));
+        p += ivec2(u_tex_origin) * scale;
+        p = clamp(p, ivec2(0), physical - 1);
+    }
+    vec4 color = floor(texelFetch(u_tex, p, level) * 255.0 + 0.5);
+    // GPU alpha mirrors stencil bytes. Expand the source format before
+    // filtering, just as decoding packed guest texels would do.
+    if (u_tex_format == 0) color.a = 255.0;
+    else if (u_tex_format == 1) color.a = (int(color.a) & 128) != 0 ? 255.0 : 0.0;
+    else if (u_tex_format == 2) color.a = floor(color.a / 16.0) * 17.0;
+    return color;
 }
 vec4 mip_level(vec2 uv, int level, bool linear) {
-    ivec2 size = max(ivec2(u_tex_size) >> level, ivec2(1));
+    ivec2 size = max(ivec2(u_tex_window.x > 0.0 ? u_tex_window : u_tex_size) >> level, ivec2(1));
     // GE first truncates to eight fractional coordinate bits, including
     // negative values, then uses four bits for bilinear weights.
     vec2 at = trunc(uv * vec2(size) * 256.0) / 256.0;
+    if (u_tex_window.x > 0.0) {
+        // Preserve finer source samples at increased internal resolution.
+        // LOD still uses PSP-space derivatives, independent of this scale.
+        ivec2 scale = max(textureSize(u_tex, 0) / ivec2(u_tex_size), ivec2(1));
+        at *= vec2(scale);
+        size *= scale;
+    }
     vec4 color = vec4(0.0);
     if (!linear) {
         color = mip_texel(ivec2(floor(at)), level, size);
@@ -172,7 +193,7 @@ vec4 sample_mips(vec2 uv) {
     float lod = clamp(detail, 0.0, u_lod_limits.x);
     bool blend = u_lod_limits.y > 0.0;
     int level = int(floor(lod + (blend ? 0.0 : 0.5)));
-    vec2 normalized = uv / u_tex_size;
+    vec2 normalized = uv / (u_tex_window.x > 0.0 ? u_tex_window : u_tex_size);
     vec4 color = mip_level(normalized, level, linear);
     if (blend && float(level) < u_lod_limits.x) {
         float f = floor(fract(lod) * 16.0);
@@ -238,14 +259,7 @@ void main() {
             // below size can round to size in the GPU sampler and wrap to 0.
             uv = size - 0.5;
         }
-        if (u_tex_window.x > 0.0) {
-            // Wrap or clamp inside the texture's own rectangle, never into neighbouring pixels.
-            uv = mix(mod(uv, u_tex_window), clamp(uv, vec2(0.5), u_tex_window - 0.5), u_tex_clamp);
-        }
-        // Decoded level-zero textures need the same byte/weight arithmetic as
-        // mip chains. GPU surface windows retain their scaled sampling path.
-        vec4 t = (u_lod_limits.x > 0.0 || u_tex_window.x == 0.0) ? sample_mips(uv) : texture(u_tex, (uv + u_tex_origin) / u_tex_size);
-        if (u_tex_opaque) t.a = 1.0;
+        vec4 t = sample_mips(uv);
         // GE texture functions operate on byte channels, before blending or
         // alpha tests. Preserve the division's truncation and double RGB first.
         c = primary;
@@ -631,7 +645,7 @@ bool GeGl::init() {
     u_clear_ = glGetUniformLocation(program_, "u_clear");
     u_tex_window_ = glGetUniformLocation(program_, "u_tex_window");
     u_tex_clamp_ = glGetUniformLocation(program_, "u_tex_clamp");
-    u_tex_opaque_ = glGetUniformLocation(program_, "u_tex_opaque");
+    u_tex_format_ = glGetUniformLocation(program_, "u_tex_format");
     u_fog_enable_ = glGetUniformLocation(program_, "u_fog_enable");
     u_secondary_enable_ = glGetUniformLocation(program_, "u_secondary_enable");
     u_fog_color_ = glGetUniformLocation(program_, "u_fog_color");
@@ -1298,7 +1312,7 @@ GLuint GeGl::texture_for_state(Surface *source, int ox, int oy) {
             set_uniform(u_tex_origin_, static_cast<float>(ox), static_cast<float>(oy), 0.0f, 2);
             set_uniform(u_tex_window_, static_cast<float>(s.tex_width), static_cast<float>(s.tex_height), 0.0f, 2);
             set_uniform(u_tex_clamp_, s.clamp_u ? 1.0f : 0.0f, s.clamp_v ? 1.0f : 0.0f, 0.0f, 2);
-            set_uniform_int(u_tex_opaque_, s.tex_format == 0u ? 1 : 0);
+            set_uniform_int(u_tex_format_, static_cast<int>(s.tex_format));
             if (source != current_) return source->color;
             ++passes_.feedback_copies;
             // Sampling the surface being drawn: read from a snapshot of the sampled part.
@@ -1354,7 +1368,7 @@ GLuint GeGl::texture_for_state(Surface *source, int ox, int oy) {
     set_uniform(u_tex_origin_, 0.0f, 0.0f, 0.0f, 2);
     set_uniform(u_tex_window_, 0.0f, 0.0f, 0.0f, 2);
     set_uniform(u_tex_clamp_, s.clamp_u ? 1.0f : 0.0f, s.clamp_v ? 1.0f : 0.0f, 0.0f, 2);
-    set_uniform_int(u_tex_opaque_, 0);
+    set_uniform_int(u_tex_format_, 3);
     return texture.id;
 }
 
@@ -1388,7 +1402,8 @@ void GeGl::apply_state(bool has_secondary) {
                 // Read only by a masked alpha test (and vertex alpha is 1, so texel alpha
                 // reaches the test unchanged): only the tested bits need to be right.
                 std::uint32_t bits = 0xFFu;
-                if (!src_alpha_blend && s.tex_func != 1u &&
+                if (s.tex_format == 3u && !s.min_linear && !s.mag_linear &&
+                    !src_alpha_blend && s.tex_func != 1u &&
                     std::all_of(batch_.begin(), batch_.end(), [](const GlVertex &v) { return v.a == 255u; }))
                     bits = s.alpha_mask & 0xFFu;
                 const Rect window{source_ox, source_oy, source_ox + static_cast<int>(s.tex_width) - 1,
@@ -1456,6 +1471,11 @@ void GeGl::apply_state(bool has_secondary) {
                 static_cast<float>(scale_), 3);
     set_uniform(u_lod_filter_, s.min_linear ? 1.0f : 0.0f, s.mag_linear ? 1.0f : 0.0f, 0.0f, 2);
 
+    // Separate GL surfaces can still alias the same guest VRAM (for example
+    // RGB565 writes read back through an RGBA8888 texture view).
+    batch_reads_feedback_ = !s.clear && s.texture && source != nullptr &&
+        source->offset < surface.offset + row_bytes(surface) * surface.height &&
+        surface.offset < source->offset + row_bytes(*source) * source->height;
     GLuint texture = 0u;
     if (!s.clear && s.texture) texture = texture_for_state(source, source_ox, source_oy);
 
@@ -1751,9 +1771,9 @@ void GeGl::flush() {
                  GL_STREAM_DRAW);
     const bool shader_blend = state_.blend && !state_.clear;
     const bool reads_destination = shader_blend && blend_reads_destination();
-    // A source-only blend still needs ordered source snapshots when it samples
-    // a GPU target that may be the surface being written.
-    if (shader_blend && (reads_destination || (state_.texture && state_.tex_from_target))) build_blend_groups();
+    // Source feedback needs a fresh snapshot across overlapping primitives,
+    // even with blending disabled. An independent source need not split.
+    if (reads_destination || batch_reads_feedback_) build_blend_groups();
     else {
         bool rectangle = false;
         blend_group_ends_.assign(1u, indices_.size());

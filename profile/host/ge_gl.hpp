@@ -244,7 +244,7 @@ private:
     bool batch_writes_stencil_{};
     int batch_stencil_value_{-1}; // value a rectangular stencil batch sets everywhere it covers
     GLsizei scratch_width_{}, scratch_height_{};
-    GLint u_tex_opaque_{};
+    GLint u_tex_format_{};
     void apply_state(bool has_secondary);
     // glBlitFramebuffer with the scissor test off and all colour channels on.
     void blit(GLuint from, const GLint src[4], GLuint to, const GLint dst[4], GLbitfield mask);
@@ -312,6 +312,7 @@ private:
     std::vector<Rect> blend_group_bounds_, triangle_bounds_;
     GlDrawState state_{};
     bool state_valid_{};
+    bool batch_reads_feedback_{};
     Surface *current_{};
     int current_ox_{}, current_oy_{};
     std::uint32_t frame_{1};

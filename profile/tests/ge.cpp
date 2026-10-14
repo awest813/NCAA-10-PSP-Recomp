@@ -1422,6 +1422,194 @@ void decoded_filter_precision() {
     }
 }
 
+void surface_filter_precision() {
+    std::cout << "GPU surface-window filter precision: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl);
+    const std::array<unsigned, 4> colors = {0x0D110503, 0xF1CD9565, 0x257F3B1F, 0xAD2BD3EF};
+    // The four source pixels occupy a 2x2 window inside a larger GPU surface.
+    // Expected bytes include each source format's RGB and stencil precision.
+    const std::array<std::array<unsigned, 7>, 4> expected = {{
+        {0xFF493626, 0xFF4E3C2C, 0xFF6F644E, 0xFF100400, 0xFF2A1106, 0xFFCE9663, 0xFF493626},
+        {0x3F493326, 0x3F4E3B2C, 0x8F6F624E, 0x00100000, 0x002A0E06, 0xFFCE9463, 0x3F493326},
+        {0x40483425, 0x414C3A2B, 0x876D654E, 0x00110000, 0x082A0C04, 0xFFCC9966, 0x40483425},
+        {0x464A3729, 0x464F3E30, 0x86706450, 0x0D110503, 0x132C120A, 0xF1CD9565, 0x464A3729},
+    }};
+    struct Case { float u, v; bool linear, clamp; };
+    const std::array<Case, 7> cases = {{{.75f, .75f, true, false}, {.8f, .9f, true, false},
+        {-65.0f / 1024, .75f, true, false}, {-1.0f / 1024, .5f, false, false},
+        {-65.0f / 1024, .75f, true, true}, {1025.0f / 1024, .5f, false, false},
+        {.75f, 205.0f / 256, true, false}}};
+    auto clear = [&](unsigned offset, unsigned format, unsigned color, float x0, float y0, float x1, float y1) {
+        const std::array<float, 6> data = {x0, y0, 0, x1, y1, 0};
+        for (unsigned i = 0; i < data.size(); ++i)
+            memory.store32(vertices + i * 4, std::bit_cast<unsigned>(data[i]));
+        DisplayList dl(memory);
+        dl.command(0x9C, offset); dl.command(0x9D, 64); dl.command(0xD2, format);
+        dl.command(0xD4, 0); dl.command(0xD5, 63 | (63 << 10));
+        dl.command(0x12, (3u << 7) | (1u << 23)); dl.command(0x1E, 0);
+        dl.command(0x21, 0); dl.command(0x22, 0); dl.command(0x24, 0); dl.command(0xD3, 0x301);
+        dl.command(0x55, color & 0xFFFFFF); dl.command(0x58, color >> 24);
+        dl.draw(6, 2); dl.run(ge);
+    };
+    for (int scale : {1, 2}) {
+        assert(gl.set_render_scale(scale) == scale);
+        for (unsigned format : {3u, 0u, 1u, 2u}) {
+            clear(0, format, 0xFFFF00FF, 0, 0, 64, 64); // Outside-window sentinel.
+            const unsigned bpp = format == 3 ? 4 : 2;
+            const unsigned source = 0x04000000 + (9 * 64 + 8) * bpp; // 16-byte aligned in every format.
+            for (bool feedback : {false, true}) {
+                if (feedback && format != 3) continue;
+                const unsigned destination = feedback ? 0 : 0x60000;
+                for (unsigned mask : {0x40u, 0xFFu}) for (unsigned i = 0; i < cases.size(); ++i) {
+                    const auto &test = cases[i];
+                    for (unsigned y = 0; y < 2; ++y) for (unsigned x = 0; x < 2; ++x) {
+                        const unsigned color = colors[y * 2 + x];
+                        clear(0, format, color & 0xFFFFFF, 8.0f + x, 9.0f + y, 9.0f + x, 10.0f + y);
+                        // Update stencil without writing the texture's alpha
+                        // attachment. Linear filtering needs all source alpha
+                        // bits, even when the final test checks only bit six.
+                        DisplayList stencil(memory);
+                        stencil.command(0xD3, 0); stencil.command(0x24, 1);
+                        stencil.command(0xDC, 1 | ((color >> 24) << 8) | 0xFF0000);
+                        stencil.command(0xDD, 0x020202); stencil.command(0xE9, 0);
+                        stencil.draw(6, 2); stencil.run(ge);
+                    }
+                    gl.flush();
+                    assert(gl.is_gpu_target(source, format, 64));
+                    clear(destination, 3, 0xFFFF00FF, 32, 32, 48, 48);
+                    // At 2x choose the same physical tap weights across the
+                    // source pixel boundary, preserving its finer sample grid.
+                    auto scaled = [scale](float uv) { return (uv < 0 ? uv : uv + scale - 1) / scale; };
+                    const float u = scaled(test.u), v = scaled(test.v);
+                    const std::array<float, 10> data = {u, v, 32, 32, 0, u, v, 48, 48, 0};
+                    for (unsigned j = 0; j < data.size(); ++j)
+                        memory.store32(vertices + j * 4, std::bit_cast<unsigned>(data[j]));
+                    DisplayList draw(memory);
+                    draw.command(0x12, 3u | (3u << 7) | (1u << 23)); draw.command(0x1E, 1);
+                    draw.command(0xD3, 0); draw.command(0xA0, source & 0xFFFFFF); draw.command(0xA8, 0x040040);
+                    draw.command(0xB8, 0x101); draw.command(0xC2, 0); draw.command(0xC3, format);
+                    draw.command(0xC8, 1); draw.command(0xC9, 0x103);
+                    draw.command(0xC7, test.clamp ? 0x101 : 0); draw.command(0xC6, test.linear ? 0x101 : 0);
+                    draw.command(0x22, 1);
+                    draw.command(0xDB, 2 | (((expected[format][i] >> 24) & mask) << 8) | (mask << 16));
+                    const auto downloads = gl.downloads(), copies = gl.passes().feedback_copies;
+                    draw.draw(6, 2); draw.run(ge); gl.flush();
+                    assert(gl.downloads() == downloads);
+                    assert(gl.passes().feedback_copies == copies + (feedback ? 1 : 0));
+                    expect_pixel(memory, &gl, expected[format][i] & 0xFFFFFF, 0,
+                                 0x04000000 + destination + (40 * 64 + 40) * 4);
+                }
+            }
+        }
+    }
+}
+
+void surface_filter_feedback_order() {
+    std::cout << "Filtered GPU feedback ordering: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl);
+    const std::array<unsigned, 4> colors = {0x110503, 0xCD9565, 0x7F3B1F, 0x2BD3EF};
+    for (int scale : {1, 2}) for (bool alias : {false, true}) {
+        assert(gl.set_render_scale(scale) == scale);
+        for (unsigned i = 0; i < colors.size(); ++i) {
+            const float x = 8.0f + (i & 1), y = 9.0f + (i >> 1);
+            const std::array<float, 6> data = {x, y, 0, x + 1, y + 1, 0};
+            for (unsigned j = 0; j < data.size(); ++j)
+                memory.store32(vertices + j * 4, std::bit_cast<unsigned>(data[j]));
+            DisplayList clear(memory);
+            clear.command(0x9C, 0); clear.command(0x9D, 64); clear.command(0xD2, 3);
+            clear.command(0xD4, 0); clear.command(0xD5, 63 | (63 << 10));
+            clear.command(0x12, (3u << 7) | (1u << 23)); clear.command(0x1E, 0);
+            clear.command(0xD3, 0x301); clear.command(0x55, colors[i]); clear.command(0x58, 255);
+            clear.draw(6, 2); clear.run(ge);
+        }
+        gl.flush();
+        const float uv = 1.0f - .25f / scale;
+        const std::array<float, 10> data = {uv, uv, alias ? 16.0f : 8.0f, 9, 0,
+                                           uv, uv, alias ? 20.0f : 10.0f, 11, 0};
+        for (unsigned i = 0; i < data.size(); ++i)
+            memory.store32(vertices + i * 4, std::bit_cast<unsigned>(data[i]));
+        DisplayList draw(memory);
+        draw.command(0x9D, alias ? 128 : 64); draw.command(0xD2, alias ? 0 : 3);
+        draw.command(0x12, 3u | (3u << 7) | (1u << 23)); draw.command(0x1E, 1); draw.command(0xD3, 0);
+        draw.command(0xA0, (9 * 64 + 8) * 4); draw.command(0xA8, 0x040040);
+        draw.command(0xB8, 0x101); draw.command(0xC2, 0); draw.command(0xC3, 3);
+        draw.command(0xC6, 0x101); draw.command(0xC7, 0x101); draw.command(0xC8, 1);
+        draw.command(0xC9, alias ? 0 : 0x100); draw.command(0x55, 0x808080);
+        draw.command(0x22, alias ? 0 : 1); draw.command(0xDB, 0xFFFF02);
+        const auto downloads = gl.downloads(), copies = gl.passes().feedback_copies;
+        const auto reinterprets = gl.passes().reinterprets;
+        draw.draw(6, 2); draw.draw(6, 2); draw.run(ge); gl.flush();
+        assert(gl.downloads() == downloads);
+        if (!alias && gl.passes().feedback_copies != copies + 2)
+            std::cerr << "filtered feedback copies: " << gl.passes().feedback_copies - copies << '\n';
+        assert(gl.passes().feedback_copies == copies + (alias ? 0 : 2));
+        // First filtered/modulated write is (20,27,37). The overlapping
+        // primitive must resample it, producing (10,13,18), not the first result.
+        if (!alias) expect_pixel(memory, &gl, 0x120D0A, 0, 0x04000000 + (9 * 64 + 8) * 4);
+        else {
+            // First RGB565 write is 0x20C2. The aliased RGBA view sees
+            // (194,32,194); resampling/modulation must then write 0x608C.
+            assert(gl.passes().reinterprets > reinterprets);
+            constexpr unsigned at = 0x04000000 + (9 * 128 + 16) * 2;
+            gl.prepare_vram_read(at, 2);
+            assert(memory.load16(at) == 0x608C);
+        }
+    }
+}
+
+void surface_filter_scale_and_lod() {
+    std::cout << "GPU surface filter scale and LOD: GLES3" << std::endl;
+    psprecomp::GuestMemory memory;
+    pspweb::GeGl gl(memory);
+    pspweb::Ge ge(memory);
+    assert(gl.init()); ge.set_gl(&gl); assert(gl.set_render_scale(2) == 2);
+    struct Vertex { unsigned rgba; float x, y, z; };
+    const std::array<Vertex, 4> source = {{{0xFF000000, 8, 9, 0}, {0xFF000010, 9, 9, 0},
+                                         {0xFF000000, 8, 11, 0}, {0xFF000010, 9, 11, 0}}};
+    for (unsigned i = 0; i < source.size(); ++i) {
+        memory.store32(vertices + i * 16, source[i].rgba);
+        memory.store32(vertices + i * 16 + 4, std::bit_cast<unsigned>(source[i].x));
+        memory.store32(vertices + i * 16 + 8, std::bit_cast<unsigned>(source[i].y));
+        memory.store32(vertices + i * 16 + 12, 0);
+    }
+    DisplayList gradient(memory);
+    gradient.command(0x9C, 0); gradient.command(0x9D, 64); gradient.command(0xD2, 3);
+    gradient.command(0xD4, 0); gradient.command(0xD5, 63 | (63 << 10));
+    gradient.command(0x12, (7u << 2) | (3u << 7) | (1u << 23)); gradient.command(0x50, 1);
+    gradient.draw(4, 4); gradient.run(ge); gl.flush();
+    constexpr unsigned source_address = 0x04000000 + (9 * 64 + 8) * 4;
+    assert(gl.is_gpu_target(source_address, 3, 64));
+    auto sample_source = [&](float u, unsigned filter, int bias, unsigned expected) {
+        const std::array<float, 10> data = {u, .5f, 32, 32, 0, u, .5f, 48, 48, 0};
+        for (unsigned i = 0; i < data.size(); ++i)
+            memory.store32(vertices + i * 4, std::bit_cast<unsigned>(data[i]));
+        DisplayList draw(memory);
+        draw.command(0x9C, 0x60000); draw.command(0x12, 3u | (3u << 7) | (1u << 23));
+        draw.command(0x1E, 1); draw.command(0xA0, source_address & 0xFFFFFF); draw.command(0xA8, 0x040040);
+        draw.command(0xB8, 0x100); draw.command(0xC2, 0); draw.command(0xC3, 3);
+        draw.command(0xC7, 0x101); draw.command(0xC9, 0x103); draw.command(0xC6, filter);
+        draw.command(0xC8, 1 | ((static_cast<unsigned>(bias) & 255) << 16));
+        draw.command(0x55, 0xFFFFFF); draw.command(0x58, 255);
+        const auto downloads = gl.downloads();
+        draw.draw(6, 2); draw.run(ge); gl.flush();
+        assert(gl.downloads() == downloads);
+        expect_pixel(memory, &gl, expected, 0, 0x04060000 + (40 * 64 + 40) * 4);
+    };
+    // Two distinct samples inside one logical PSP pixel survive 2x sampling.
+    sample_source(.25f, 0, 0, 4); sample_source(.75f, 0, 0, 12);
+    // No mip chain is needed for LOD mode/bias to choose min versus mag.
+    for (int bias : {-16, 16}) for (unsigned filter : {0u, 1u, 0x100u, 0x101u}) {
+        const bool linear = (filter & (bias > 0 ? 1u : 0x100u)) != 0;
+        sample_source(.375f, filter, bias, linear ? 6 : 4);
+    }
+}
+
 // Minification and magnification are independent GE filter settings. Use a
 // striped texture with known fractional sample positions in both regimes.
 void texture_filters() {
@@ -1610,6 +1798,9 @@ int main() {
     interpolated_secondary_precision();
     texture_function_precision(true);
     decoded_filter_precision();
+    surface_filter_precision();
+    surface_filter_feedback_order();
+    surface_filter_scale_and_lod();
     texture_filters();
     texture_mipmaps();
     mipmap_clut_and_vram();

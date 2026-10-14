@@ -1846,6 +1846,11 @@ void Ge::submit_gl_state() {
         st.clamp_v = (regs_[kTexWrap] & 0x100u) != 0u;
         st.min_linear = (regs_[0xC6] & 1u) != 0u;
         st.mag_linear = (regs_[0xC6] & 0x100u) != 0u;
+        // LOD mode/bias also selects min/mag filtering with only level zero,
+        // including textures sampled directly from a GPU surface.
+        st.lod_mode = regs_[0xC8] & 3u;
+        st.lod_bias = static_cast<float>(static_cast<std::int8_t>(regs_[0xC8] >> 16u)) / 16.0f;
+        st.lod_slope = cmd_float(regs_[0xD0]);
         const std::uint32_t address = (regs_[kTexAddr0] & 0xFFFFF0u) | ((regs_[kTexBufWidth0] & 0x0F0000u) << 8u);
         const std::uint32_t format = regs_[kTexFormat] & 0xFu;
         const std::uint32_t buf_width = regs_[kTexBufWidth0] & 0x7FFu;
@@ -1865,9 +1870,6 @@ void Ge::submit_gl_state() {
                 st.texture_hash = texture_->source_hash;
                 st.mip_count = texture_->mip_count;
                 st.mip_linear = (regs_[0xC6] & 2u) != 0u;
-                st.lod_mode = regs_[0xC8] & 3u;
-                st.lod_bias = static_cast<float>(static_cast<std::int8_t>(regs_[0xC8] >> 16u)) / 16.0f;
-                st.lod_slope = cmd_float(regs_[0xD0]);
                 for (unsigned level = 1; level <= st.mip_count; ++level)
                     st.mip_texels[level - 1] = texture_->mips[level - 1].data();
                 st.tex_width = static_cast<std::uint32_t>(texture_width_);

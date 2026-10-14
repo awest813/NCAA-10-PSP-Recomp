@@ -38,6 +38,8 @@ Native graphics captures must explicitly request and verify at least eight bits 
 
 Blend optimizations must preserve overlapping primitive order, destination stencil-alpha updates and self-texture feedback. Test GPU-only snapshots without CPU downloads, shared-edge/disjoint batching and source-only equations. Keep native replay timings separate from actual browser/gameplay FPS, and report local image regions that worsen even when full-frame error improves.
 
+GPU texture windows must wrap/clamp individual filter taps within their own bounds and expand packed source alpha before filtering. A masked alpha test can still require all source alpha bits after interpolation. Source feedback needs ordering with blending disabled and across separate surfaces that alias guest VRAM. Test overlapping format views and retain distinct source samples at higher internal resolutions; scaled rendering is not native PSP hardware evidence.
+
 ## State and documentation
 
 - Preserve local game files, prior diagnostic captures and save exports. Export/hash saves before replacing fixtures; keep baseline and progressed checkpoints identifiable.
