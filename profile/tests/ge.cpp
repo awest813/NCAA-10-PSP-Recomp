@@ -25,6 +25,26 @@ void float24_rows() {
     assert(bits(pspweb::ge_math::scale_offset(1.5f, 1 + 0x1p-15f, -1.5f)) == 0x38000000u);
 }
 
+void viewport_arithmetic() {
+    using namespace pspweb::ge_math;
+    auto bits = [](float value) { return std::bit_cast<std::uint32_t>(value); };
+    // Reference literals cover exact powers, segment edges and both ends.
+    for (const auto &pair : std::array<std::array<unsigned, 2>, 6>{{
+        {0x3F800000, 0x3F800000}, {0x3F800100, 0x3F7FFE00}, {0x3F80FF00, 0x3F7E0600},
+        {0x3F810000, 0x3F7E0300}, {0x3FC00000, 0x3F2AAA00}, {0x3FFFFF00, 0x3F000100}}}) {
+        assert(bits(reciprocal(std::bit_cast<float>(pair[0]))) == pair[1]);
+        assert(bits(reciprocal(std::bit_cast<float>(pair[0] | 0x80000000u))) == (pair[1] | 0x80000000u));
+    }
+    // Addition can keep a carry bit that a row result would discard.
+    assert(bits(aligned_add(1.5f, .5f + 0x1p-15f)) == 0x40000080u);
+    assert(aligned_add(32768, -32767.5f) == 1);
+    assert(bits(product24(1.5f, 1 + 0x1p-15f)) == 0x3FC00100u);
+    assert(viewport(.016875f, 1, 32, 2048, 1) == 2048.5f);
+    const float w = std::bit_cast<float>(0x3FA66600u);
+    assert(std::floor(viewport(.75f, w, 32767, 32767, reciprocal(w))) == 51670);
+    assert(std::floor(viewport(-.25f, w, 32767, 32767, reciprocal(w))) == 26466);
+}
+
 constexpr std::uint32_t list = 0x08800000u, vertices = 0x08810000u;
 constexpr std::uint32_t sample = 0x04000000u + (32u * 64u + 32u) * 4u;
 class DisplayList {
@@ -61,6 +81,47 @@ void expect_pixel(psprecomp::GuestMemory &memory, pspweb::GeGl *gl, std::uint32_
     }
     if (!matches) std::cerr << "pixel: expected 0x" << std::hex << rgb << ", got 0x" << actual << std::dec << '\n';
     assert(matches);
+}
+
+void viewport_pixels(bool use_gl) {
+    std::cout << "GE reciprocal/viewport pixels: " << (use_gl ? "GLES3" : "software") << std::endl;
+    psprecomp::GuestMemory memory; pspweb::GeGl gl(memory); pspweb::Ge ge(memory);
+    if (use_gl) { assert(gl.init()); ge.set_gl(&gl); }
+    auto *backend = use_gl ? &gl : nullptr;
+    auto geometry = [&](const std::array<float, 9> &values) {
+        if (backend) backend->flush();
+        for (unsigned i = 0; i < values.size(); ++i)
+            memory.store32(vertices + i * 4, std::bit_cast<std::uint32_t>(values[i]));
+    };
+    geometry({.016875f, -.75f, 0, .016875f, .75f, 0, .75f, 0, 0});
+    DisplayList setup(memory);
+    setup.command(0x9C, 0); setup.command(0x9D, 64); setup.command(0xD2, 3);
+    setup.command(0x9E, 0x100000); setup.command(0x9F, 64);
+    setup.command(0xD4, 0); setup.command(0xD5, 63 | (63 << 10));
+    setup.command(0x12, 3u << 7);
+    setup.number(0x42, 32); setup.number(0x43, 32); setup.number(0x44, 32767);
+    setup.number(0x45, 2048); setup.number(0x46, 2048); setup.number(0x47, 32767);
+    setup.command(0x4C, 2016 * 16); setup.command(0x4D, 2016 * 16);
+    setup.command(0x55, 0xFFFFFF); setup.command(0x58, 255);
+    setup.draw(); setup.run(ge);
+    // Add at screen center 2048 before offset removal: left edge is 32.5.
+    // Removing the center early and applying the old bias put it at 32.5625.
+    expect_pixel(memory, backend, 0xFFFFFF);
+    for (const auto &pair : std::array<std::array<float, 2>, 2>{{{.75f, 51670}, {-.25f, 26466}}}) {
+        geometry({-.75f, -.75f, pair[0], .75f, -.75f, pair[0], 0, .75f, pair[0]});
+        DisplayList first(memory);
+        first.command(0x12, 3u << 7); first.command(0x3E, 0);
+        for (unsigned i = 0; i < 16; ++i) first.number(0x3F, i == 15 ? 1.3f : (i % 5 == 0 ? 1.0f : 0.0f));
+        first.command(0x23, 1); first.command(0xE7, 0); first.command(0xDE, 1);
+        first.command(0x55, 0x0000FF); first.draw(); first.run(ge);
+        expect_pixel(memory, backend, 0x0000FF);
+        geometry({8, 8, pair[1], 56, 8, pair[1], 32, 56, pair[1]});
+        DisplayList equal(memory);
+        equal.command(0x12, (3u << 7) | (1u << 23)); equal.command(0xDE, 2);
+        equal.command(0x55, 0x00FF00); equal.draw(); equal.run(ge);
+        // Exact through depth agrees with transformed depth, unlike IEEE divide.
+        expect_pixel(memory, backend, 0x00FF00);
+    }
 }
 
 void float24_matrix_composition(bool use_gl) {
@@ -2260,6 +2321,8 @@ struct GlContext {
 }
 int main() {
     float24_rows();
+    viewport_arithmetic();
+    viewport_pixels(false);
     float24_uv_stages(false);
     float24_matrix_composition(false);
     texture_row_alignment(false);
@@ -2279,6 +2342,7 @@ int main() {
     interpolated_color_precision(false);
     texture_function_precision(false);
     GlContext context;
+    viewport_pixels(true);
     float24_uv_stages(true);
     float24_matrix_composition(true);
     texture_row_alignment(true);

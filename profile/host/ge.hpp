@@ -203,7 +203,7 @@ private:
     bool fog_dirty_{true};
     float fog_row_[4]{}, fog_end_{}, fog_slope_{};
     bool submitted_through_{};
-    float viewport_[6]{}; // x/y/z scale, x/y/z centre (minus the drawing offset for x/y)
+    float viewport_[6]{}; // x/y/z scale, raw screen x/y/z centre; subtract drawing offsets after the viewport
     std::vector<GlVertex> scratch_screen_;
     std::vector<std::uint8_t> scratch_inside_;
     std::vector<std::uint32_t> scratch_batch_index_;

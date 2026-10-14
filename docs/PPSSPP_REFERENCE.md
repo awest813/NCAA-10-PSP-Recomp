@@ -1,6 +1,16 @@
 # PPSSPP reference evidence
 
-## Latest float24 transform comparison (2026-10-14)
+## Latest viewport comparison (2026-10-14)
+
+The oracle remains pinned `61e60ee6ff`. An actual SDSU draw-39 trace finds four visible y coordinates at 105.0625 that the measured viewport places at 105.125. The corrected viewport uses the measured reciprocal, normalized float24 products, a carry-preserving aligned add at the raw screen center, 12.4 flooring and drawing-offset subtraction afterward; Z floors before interpolation. Through mode keeps its bypass. The old transformed triangle/line bias is removed.
+
+`ge_reciprocal_data.hpp` contains factual coefficients independently fitted against all 32,768 normalized pinned reference-function outputs using the [documented relation](https://www.ppsspp.org/docs/psp-hardware/gpu/arithmetic/). No reference implementation was copied into production. All **16,646,144 normal float24 reciprocal inputs** match, as do **two million cases each** for aligned add, normalized product and viewport output. New software/GLES pixel fixtures fail prior source at edge coverage and exact depth equality. These checks establish the tested vertex viewport arithmetic, not fragment division, clipping, lighting, nonfinite handling or physical PSP frame identity.
+
+Against `6f51a3c`, all fourteen full/prefix MAEs and ROIs improve or stay equal. Full SDSU **0.417833 → 0.110141**, GT **0.311446 → 0.055060**; field **0.039298 → 0.026065**, full pause **0.028872 → 0.028872**. Raw prefix-40 differences fall **27,808 → 25,955**, with `(0,107)` still one level off in green/blue. Each RGBA8 presentation equals direct RGB565. Fixed-point UV/attribute planes are the next target. Historical tables below retain their original baselines.
+
+Matched native medians rise **1.14% / 0.63%**; maximum SDSU worsens while GT improves. O3 ABBA, sixteen frames/run, first two excluded, FrameProfile both sides, final reads excluded. Repeated hashes equal single frames; these are not browser FPS. `build/reference-viewport-20261014/accepted-provenance.json`, `performance.json`, `early-raw-residual.json`, `draw39-stage-compare.log` and production oracle log preserve the evidence; comparison panels live in `build/reference-hardware-20261014/viewport`. Latest package: `build/static-ncaa10-viewport`. No browser/reference GUI or original save state changed.
+
+## Prior float24 transform comparison (2026-10-14)
 
 The oracle remains pinned `61e60ee6ff` below. Independent finite GE row arithmetic now matches it on 1.1 million synthetic cases. Column-major matrices compose P * (V * W), and lit/skinned clip positions use that same combined matrix. UV scaling truncates the product before adding the offset. Actual software/GLES fixtures fail the prior source and pass the correction, including lit/unlit paths and cancellation-sensitive matrix grouping. No reference implementation was copied.
 

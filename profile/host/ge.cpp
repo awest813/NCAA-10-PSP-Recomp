@@ -769,10 +769,14 @@ Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
         v.z = cv.cz;
         v.w = 1.0f;
     } else {
-        const float inv_w = 1.0f / cv.cw;
-        v.x = cv.cx * inv_w * viewport_[0] + viewport_[3];
-        v.y = cv.cy * inv_w * viewport_[1] + viewport_[4];
-        v.z = cv.cz * inv_w * viewport_[2] + viewport_[5];
+        const float inv_w = ge_math::reciprocal(cv.cw);
+        const float screen_x = ge_math::viewport(cv.cx, cv.cw, viewport_[0], viewport_[3], inv_w);
+        const float screen_y = ge_math::viewport(cv.cy, cv.cw, viewport_[1], viewport_[4], inv_w);
+        // The raw screen center participates in the GE adder. Only then does
+        // the integer drawing offset move the 12.4 coordinates to the target.
+        v.x = (std::floor(screen_x * 16.0f) - float(regs_[kOffsetX] & 0xFFFFu)) / 16.0f;
+        v.y = (std::floor(screen_y * 16.0f) - float(regs_[kOffsetY] & 0xFFFFu)) / 16.0f;
+        v.z = std::floor(ge_math::viewport(cv.cz, cv.cw, viewport_[2], viewport_[5], inv_w));
         v.w = cv.cw;
     }
     v.u = cv.u;
@@ -789,11 +793,10 @@ Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
 
 Ge::Vertex Ge::to_raster(const ClipVertex &cv) const {
     Vertex v = to_screen(cv);
-    // Retain subpixels before interpolation. The transformed viewport is still
-    // a float approximation; exact GE float24 transform/plane setup is separate.
-    const float bias = layout_.through ? 0.0f : 0.375f;
-    v.x = std::trunc(v.x * 16.0f + bias) / 16.0f;
-    v.y = std::trunc(v.y * 16.0f + bias) / 16.0f;
+    // Transformed coordinates already passed the viewport grid. Through
+    // coordinates truncate toward zero directly, preserving their bypass.
+    v.x = std::trunc(v.x * 16.0f) / 16.0f;
+    v.y = std::trunc(v.y * 16.0f) / 16.0f;
     return v;
 }
 
@@ -806,8 +809,8 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
     viewport_[0] = cmd_float(regs_[kViewportXScale]);
     viewport_[1] = cmd_float(regs_[kViewportYScale]);
     viewport_[2] = cmd_float(regs_[kViewportZScale]);
-    viewport_[3] = cmd_float(regs_[kViewportXCenter]) - static_cast<float>(regs_[kOffsetX] & 0xFFFFu) / 16.0f;
-    viewport_[4] = cmd_float(regs_[kViewportYCenter]) - static_cast<float>(regs_[kOffsetY] & 0xFFFFu) / 16.0f;
+    viewport_[3] = cmd_float(regs_[kViewportXCenter]);
+    viewport_[4] = cmd_float(regs_[kViewportYCenter]);
     viewport_[5] = cmd_float(regs_[kViewportZCenter]);
     if (tex_dirty_) build_tex_setup();
     if (light_dirty_ && (regs_[kLightingEnable] & 1u) != 0u) build_light_setup();
@@ -1185,9 +1188,8 @@ void Ge::draw_line(const ClipVertex &first, const ClipVertex &last) {
     }
     // Line coverage is stepped on the GE's 12.4 screen grid. The final endpoint
     // is excluded, so a strip junction is drawn once rather than blended twice.
-    const double bias = layout_.through ? 0.0 : 0.375;
-    const double ax = std::trunc(p.x * 16.0 + bias), ay = std::trunc(p.y * 16.0 + bias);
-    const double bx = std::trunc(q.x * 16.0 + bias), by = std::trunc(q.y * 16.0 + bias);
+    const double ax = std::trunc(p.x * 16.0), ay = std::trunc(p.y * 16.0);
+    const double bx = std::trunc(q.x * 16.0), by = std::trunc(q.y * 16.0);
     double dx = bx - ax, dy = by - ay;
     const auto steps = static_cast<std::int64_t>(std::max(std::abs(dx), std::abs(dy)) / 16.0);
     if (steps == 0) return;
