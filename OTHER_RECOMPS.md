@@ -93,3 +93,5 @@ The local [internals guide](docs/internals.md), [engineering log](ENGINEERING_LO
 The user also supplied [lcs-recomp](https://github.com/elmasas/lcs-recomp) as a possible reference. It is not a dependency in the current NCAA build path. Inspect its actual code, architecture and license before borrowing any technique; do not assume its game addresses or engine behavior apply to NCAA.
 
 This guide prepares local contributions and reports. It does not itself publish changes or send messages to another project.
+
+Triangle and rectangle sampling can differ even when rectangles are submitted as strips/fans. Recheck rejected pixel-center trials after identifying the affected primitive paths; isolated geometry is insufficient. Preserve UV/interpolation contracts when recognizing rectangles, require a true shared diagonal and test malformed quads, gradients, perspective attributes and adjacent alpha blending. NCAA’s combined grid/center/rectangle fix improves both complete reference frames without an extra varying or rendering CPU download.

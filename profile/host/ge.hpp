@@ -91,6 +91,8 @@ private:
     [[nodiscard]] Vertex to_screen(const ClipVertex &cv) const;
     void light_vertex(const float pos[3], const float normal[3], float color[4], float secondary[3]) const;
 
+    Vertex to_raster(const ClipVertex &v) const;
+    bool try_rectangle(const ClipVertex &a, const ClipVertex &b, const ClipVertex &c, const ClipVertex &d, bool strip);
     void draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVertex &c);
     void draw_line(const ClipVertex &a, const ClipVertex &b);
     void raster_triangle(const Vertex &a, const Vertex &b, const Vertex &c);

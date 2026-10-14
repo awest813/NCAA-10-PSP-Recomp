@@ -783,6 +783,16 @@ Ge::Vertex Ge::to_screen(const ClipVertex &cv) const {
     return v;
 }
 
+Ge::Vertex Ge::to_raster(const ClipVertex &cv) const {
+    Vertex v = to_screen(cv);
+    // Retain GE subpixels before interpolation. Through coordinates truncate;
+    // transformed coordinates advance a subpixel at the studied .625 boundary.
+    const float bias = layout_.through ? 0.0f : 0.375f;
+    v.x = std::trunc(v.x * 16.0f + bias) / 16.0f;
+    v.y = std::trunc(v.y * 16.0f + bias) / 16.0f;
+    return v;
+}
+
 // ---------------------------------------------------------------------------
 // Primitives
 
@@ -938,8 +948,10 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
             const bool inside = layout_.through || (cv.cz + cv.cw >= 0.0f && cv.cw >= kEpsilon);
             scratch_inside_[i] = inside ? 1u : 0u;
             if (!inside) continue;
-            const Vertex v = to_screen(cv);
-            scratch_screen_[i] = GlVertex{v.x, v.y, v.z, v.w, v.u, v.v,
+            const Vertex v = to_raster(cv);
+            // Translate by one GE subpixel so GL's half-pixel center samples
+            // the triangle at 7/16. Rectangles/line cells keep their own path.
+            scratch_screen_[i] = GlVertex{v.x + 0.0625f, v.y + 0.0625f, v.z, v.w, v.u, v.v,
                                           static_cast<std::uint8_t>(clamp255(v.r)), static_cast<std::uint8_t>(clamp255(v.g)),
                                           static_cast<std::uint8_t>(clamp255(v.b)), static_cast<std::uint8_t>(clamp255(v.a)),
                                           static_cast<std::uint8_t>(clamp255(v.sr)), static_cast<std::uint8_t>(clamp255(v.sg)),
@@ -994,12 +1006,19 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
         if (type == 3u) {
             for (std::uint32_t i = 0; i + 2u < count; i += 3u) triangle(i, i + 1u, i + 2u);
         } else if (type == 4u) {
-            for (std::uint32_t i = 2u; i < count; ++i) {
+            for (std::uint32_t i = 2u; i < count;) {
+                if ((count & 1u)==0u && (i & 1u)==0u && i+1u<count &&
+                    try_rectangle(vertices[at[i-2u]],vertices[at[i-1u]],vertices[at[i]],vertices[at[i+1u]],true)) {
+                    i+=2u;
+                    continue;
+                }
                 if ((i & 1u) == 0u) triangle(i - 2u, i - 1u, i);
                 else triangle(i - 1u, i - 2u, i);
+                ++i;
             }
         } else {
-            for (std::uint32_t i = 2u; i < count; ++i) triangle(0u, i - 1u, i);
+            if (count!=4u || !try_rectangle(vertices[at[0]],vertices[at[1]],vertices[at[2]],vertices[at[3]],false))
+                for (std::uint32_t i = 2u; i < count; ++i) triangle(0u, i - 1u, i);
         }
         return;
     }
@@ -1016,13 +1035,20 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
         for (std::uint32_t i = 0; i + 2u < count; i += 3u) draw_triangle(vert(i), vert(i + 1u), vert(i + 2u));
         break;
     case 4: // strip
-        for (std::uint32_t i = 2u; i < count; ++i) {
+        for (std::uint32_t i = 2u; i < count;) {
+            if ((count & 1u)==0u && (i & 1u)==0u && i+1u<count &&
+                try_rectangle(vert(i-2u),vert(i-1u),vert(i),vert(i+1u),true)) {
+                i+=2u;
+                continue;
+            }
             if ((i & 1u) == 0u) draw_triangle(vert(i - 2u), vert(i - 1u), vert(i));
             else draw_triangle(vert(i - 1u), vert(i - 2u), vert(i));
+            ++i;
         }
         break;
     case 5: // fan
-        for (std::uint32_t i = 2u; i < count; ++i) draw_triangle(vert(0), vert(i - 1u), vert(i));
+        if (count!=4u || !try_rectangle(vert(0),vert(1),vert(2),vert(3),false))
+            for (std::uint32_t i = 2u; i < count; ++i) draw_triangle(vert(0), vert(i - 1u), vert(i));
         break;
     case 6: // sprites
         for (std::uint32_t i = 0; i + 1u < count; i += 2u) emit_sprite(to_screen(vert(i)), to_screen(vert(i + 1u)));
@@ -1040,9 +1066,54 @@ void Ge::draw_primitive(std::uint32_t type, std::uint32_t count) {
     }
 }
 
+bool Ge::try_rectangle(const ClipVertex &a, const ClipVertex &b, const ClipVertex &c,
+                       const ClipVertex &d, bool strip) {
+    if ((regs_[kCullEnable] & 1u) != 0u || ps_.clear) return false;
+    const std::array<const ClipVertex *,4> input{&a,&b,&c,&d};
+    std::array<Vertex,4> v{};
+    for (unsigned i = 0; i < 4; ++i) {
+        const ClipVertex &cv = *input[i];
+        if (!layout_.through && (!(cv.cw >= 1e-4f) || cv.cz < -cv.cw)) return false;
+        v[i] = to_raster(cv);
+        const Vertex &p = v[0], &q = v[i];
+        if (!std::isfinite(q.x) || !std::isfinite(q.y) || !std::isfinite(q.z)) return false;
+        if (p.r != q.r || p.g != q.g || p.b != q.b || p.a != q.a ||
+            p.sr != q.sr || p.sg != q.sg || p.sb != q.sb) return false;
+        if ((ps_.z_write || ps_.z_test) && p.z != q.z) return false;
+        if (ps_.texture && (p.w != q.w || p.q != q.q || p.q != 1.0f)) return false;
+        if (ps_.fog && p.fog != q.fog) return false;
+    }
+    float x0 = v[0].x, x1 = x0, y0 = v[0].y, y1 = y0;
+    for (const Vertex &p : v) {
+        x0 = std::min(x0,p.x); x1 = std::max(x1,p.x);
+        y0 = std::min(y0,p.y); y1 = std::max(y1,p.y);
+    }
+    if (x0 == x1 || y0 == y1) return false;
+    std::array<int,4> corners{-1,-1,-1,-1};
+    std::array<unsigned,4> locations{};
+    for (unsigned i = 0; i < 4; ++i) {
+        if ((v[i].x != x0 && v[i].x != x1) || (v[i].y != y0 && v[i].y != y1)) return false;
+        const unsigned corner = (v[i].x == x1 ? 1u : 0u) + (v[i].y == y1 ? 2u : 0u);
+        if (corners[corner] != -1) return false;
+        corners[corner] = static_cast<int>(i); locations[i] = corner;
+    }
+    // The shared edge must be a diagonal: a bow-tie strip or fan is not a
+    // rectangle even when its four positions are the four unique corners.
+    if ((strip ? locations[1] ^ locations[2] : locations[0] ^ locations[2]) != 3u) return false;
+    const Vertex &tl = v[corners[0]], &tr = v[corners[1]], &bl = v[corners[2]], &br = v[corners[3]];
+    if (ps_.texture) {
+        if (tl.u != bl.u || tr.u != br.u || tl.v != tr.v || bl.v != br.v) return false;
+        if (!strip && (!(tl.u < br.u) || !(tl.v < br.v))) return false;
+    }
+    // Rectangles keep half-pixel UV sampling; triangles use the 7/16 center.
+    // Exact attribute checks avoid changing gradients or perspective mapping.
+    emit_sprite(tl,br);
+    return true;
+}
+
 void Ge::draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVertex &c) {
     if (layout_.through) {
-        emit_triangle(to_screen(a), to_screen(b), to_screen(c));
+        emit_triangle(to_raster(a), to_raster(b), to_raster(c));
         return;
     }
     // Clip against the near plane (z >= -w) and w > epsilon.
@@ -1051,7 +1122,7 @@ void Ge::draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVerte
     constexpr float kEpsilon = 1e-4f;
     auto distance = [](const ClipVertex &v) { return std::min(v.cz + v.cw, v.cw - kEpsilon); };
     if (distance(a) >= 0.0f && distance(b) >= 0.0f && distance(c) >= 0.0f) {
-        emit_triangle(to_screen(a), to_screen(b), to_screen(c));
+        emit_triangle(to_raster(a), to_raster(b), to_raster(c));
         return;
     }
     if ((regs_[kShadeMode] & 1u) == 0u) {
@@ -1077,8 +1148,8 @@ void Ge::draw_triangle(const ClipVertex &a, const ClipVertex &b, const ClipVerte
         }
     }
     if (out_count < 3u) return;
-    const Vertex first = to_screen(out[0]);
-    for (std::size_t i = 1; i + 1u < out_count; ++i) emit_triangle(first, to_screen(out[i]), to_screen(out[i + 1u]));
+    const Vertex first = to_raster(out[0]);
+    for (std::size_t i = 1; i + 1u < out_count; ++i) emit_triangle(first, to_raster(out[i]), to_raster(out[i + 1u]));
 }
 
 void Ge::draw_line(const ClipVertex &first, const ClipVertex &last) {
@@ -1240,9 +1311,9 @@ void Ge::raster_triangle(const Vertex &a, const Vertex &b, const Vertex &c) {
     const float iwa = 1.0f / a.w, iwb = 1.0f / b.w, iwc = 1.0f / c.w;
 
     for (int y = min_y; y <= max_y; ++y) {
-        const float py = static_cast<float>(y) + 0.5f;
+        const float py = static_cast<float>(y) + 0.4375f;
         for (int x = min_x; x <= max_x; ++x) {
-            const float px = static_cast<float>(x) + 0.5f;
+            const float px = static_cast<float>(x) + 0.4375f;
             float w0 = ((b.x - px) * (c.y - py) - (b.y - py) * (c.x - px)) * inv_area;
             float w1 = ((c.x - px) * (a.y - py) - (c.y - py) * (a.x - px)) * inv_area;
             float w2 = 1.0f - w0 - w1;
@@ -2029,7 +2100,7 @@ void Ge::emit_triangle(const Vertex &a, const Vertex &b, const Vertex &c) {
     const bool flat = (regs_[kShadeMode] & 1u) == 0u;
     auto convert = [&](const Vertex &v) {
         const Vertex &col = flat ? c : v;
-        return GlVertex{v.x, v.y, v.z, v.w, v.u, v.v,
+        return GlVertex{v.x + 0.0625f, v.y + 0.0625f, v.z, v.w, v.u, v.v,
                         static_cast<std::uint8_t>(clamp255(col.r)), static_cast<std::uint8_t>(clamp255(col.g)),
                         static_cast<std::uint8_t>(clamp255(col.b)), static_cast<std::uint8_t>(clamp255(col.a)),
                         static_cast<std::uint8_t>(clamp255(col.sr)), static_cast<std::uint8_t>(clamp255(col.sg)),

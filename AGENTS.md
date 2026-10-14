@@ -42,6 +42,8 @@ GPU texture windows must wrap/clamp individual filter taps within their own boun
 
 Preserve line lists/strips and endpoint exclusion: NCAA uses them for field markings. Line-cell batching may merge only identical effective shader inputs and must respect feedback boundaries. Measure shader changes on ordinary scenes too; an extra varying caused a large native slowdown even with line draws omitted. Keep fractional/antialiased-line hardware claims separate from the selected software-reference behavior.
 
+Triangle-grid/center changes must preserve rectangle UV sampling. A global center shift can improve field geometry while breaking UI edges. Rectangle recognition requires compatible attributes, separable UVs and a shared diagonal; four unique corners alone do not prove rectangle topology. Keep complete frames, isolated prefixes, malformed quads, gradients and alpha-blended adjacent primitives in acceptance evidence.
+
 ## State and documentation
 
 - Preserve local game files, prior diagnostic captures and save exports. Export/hash saves before replacing fixtures; keep baseline and progressed checkpoints identifiable.

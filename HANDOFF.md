@@ -18,7 +18,19 @@ This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAs
 
 ## Latest rendering and reference evidence
 
-### Current line-rendering checkpoint (2026-10-14)
+### Current triangle-grid and rectangle-sampling checkpoint (2026-10-14)
+
+Triangles now snap to GE 1/16 subpixels and interpolate at the studied **7/16 pixel center**. GLES translates submitted positions by one subpixel using the existing shader; software diagnostic triangles share the grid/center. Compatible axis-aligned strip/fan rectangles retain **half-pixel UV sampling**. Exact attribute/UV checks and a required shared diagonal exclude gradients, perspective/projective cases and malformed overlapping quads. Culling/clear cases decline the shortcut. Original sprite/line paths remain. No extra varying, rendering CPU download or guest CPU fallback is added.
+
+Full software-reference RGB MAE improves SDSU **0.227484 → 0.007218** (field **0.056140 → 0.004010**) and GT **0.695565 → 0.454422** (pause ROI **0**). All fourteen comparisons/ROIs improve or stay equal; RGBA8 presentation equals direct RGB565. Prefix 323 improves **0.556845 → 0.011379**, 317 **0.807843 → 0.010021**, 318/319 **0.537038 → 0.009804**. Prefix-40 raw RGB differences fall **2,915 → 994**; `(0,107)` now matches `(114,146,67)`. Rows 209/218 still differ across all 480 pixels. These are graphics diagnostics, not fresh gameplay screenshots or hardware proof.
+
+Actual GE regressions reproduce old red **16 instead of 14** and cover through-grid truncation, distinct rectangle/triangle UVs, positive/constant-V fans, reversed indexed strips, malformed-strip gaps/overlap and adjacent alpha-blended rectangles at 1x/2x. Prior color-tie/filter fixtures move origins one subpixel to preserve their exact tie/source-sample purpose. Ten native suites, seven source-workflow and eight package cases, exact NCAA verification and native/web builds pass. Final logs: `build/ncaa-sampling-final-native-build.log` / `build/ncaa-sampling-final-web-build.log`. Latest package: `build/static-ncaa10-sampling-final` (14 companions, verified boot data, no ISO).
+
+Matched O3 ABBA native medians versus `c044603`: SDSU **170.6255 → 169.644 ms (−0.58%)**, GT **144.317 → 142.8805 ms (−1.00%)**; maximums **299.340 → 290.972** / **158.214 → 155.315 ms**. Final draws/copies/pixels: **1,976 / 917 / 863,331** and **1,919 / 836 / 1,070,212**. Repeated hashes match single frames. Parser/CPU submission/presentation/GPU completion timed; final reads excluded. This does not establish browser FPS.
+
+Evidence: `build/reference-sampling-20261014/sampling-accepted-summary.json`, `sampling-accepted-performance.json`, `sampling-provenance.json`, `early-residual.json`; per-scene `sampling-accepted-comparison.json/png`. Center/grid trials without rectangle handling still worsen full frames and remain excluded. Initial harness binary/counter selection issues were corrected before acceptance. Reference sources were inspected independently, not copied. No browser/reference session or original game/save state changed. Next: rows 209/218, residual GT scene differences and broader clip/top-left/rectangle/feedback/hardware checks. Fresh browser gameplay/FPS/audio awaits Chrome access; controller/save/mode/device coverage and original 32 MiB divergence remain open. Default **64 MiB / 56 MiB user partition** and AOT execution remain intact.
+
+### Prior line-rendering checkpoint (2026-10-14)
 
 NCAA submits **720 line segments in SDSU draws 317/318**, but both renderers previously skipped line lists/strips. They now use bounded screen-grid stepping with an excluded final endpoint, interpolated color/depth/fog and projected texture coordinates. GLES emits logical pixel cells, merging adjacent cells only with identical effective inputs/LOD keys for decoded textures. Potential direct VRAM surfaces retain cell boundaries. Automatic/slope line LOD uses the discrete footprint; the shader packs it into the existing slope varying. Normal triangles retain their previous path. This restores missing field markings without a guest CPU fallback or rendering CPU readback.
 
