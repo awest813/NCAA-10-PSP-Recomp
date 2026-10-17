@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from build_pages_site import LAUNCHER, LAUNCHER_FILES, ROOT, build
+from build_pages_site import LAUNCHER, LAUNCHER_FILES, ROOT, TRANSLATOR_BUILD_FILES, build
 
 REPOSITORY = 'example/NCAA-10-PSP-Recomp'
 
@@ -29,6 +29,7 @@ class PagesSiteTests(unittest.TestCase):
         self.write('build/static-ncaa10/index.data', 'boot preload')
         for name in LAUNCHER_FILES:
             self.write(f'{LAUNCHER}/{name}', (ROOT / LAUNCHER / name).read_text(encoding='utf-8'))
+        self.write('profile/web/local_iso.js', '// iso reader')
 
     def write(self, relative, text):
         path = self.checkout / relative
@@ -42,13 +43,26 @@ class PagesSiteTests(unittest.TestCase):
         written, _ = build(self.checkout, self.output, REPOSITORY, 'abc123')
         self.assertEqual(written, ['HANDOFF.md', '_config.yml', 'docs/STATIC_HOSTING.md',
                                    'docs/media/demo.webp', 'index.md', 'play/game/index.html',
-                                   'play/index.html', 'play/launcher-sw.js', 'play/launcher.js'])
+                                   'play/index.html', 'play/launcher-sw.js', 'play/launcher.js',
+                                   'play/translate/index.html', 'play/translate/local_iso.js',
+                                   'play/translate/translate-worker.js', 'play/translate/translator.js'])
         for name in LAUNCHER_FILES:
             self.assertEqual(self.read(f'play/{name}'), (ROOT / LAUNCHER / name).read_text(encoding='utf-8'))
         on_disk = sorted(path.relative_to(self.output).as_posix()
                          for path in self.output.rglob('*') if path.is_file())
         self.assertEqual(on_disk, written)
         self.assertIn(f'repository: {REPOSITORY}', self.read('_config.yml'))
+
+    def test_translator_build_is_published_only_when_given(self):
+        translator = Path(self.temporary.name) / 'translator-web'
+        translator.mkdir()
+        (translator / 'pspweb_translator.js').write_text('// module')
+        with self.assertRaisesRegex(SystemExit, 'pspweb_translator.wasm is missing'):
+            build(self.checkout, self.output, REPOSITORY, 'abc123', translator)
+        (translator / 'pspweb_translator.wasm').write_bytes(b'\0asm\1\0\0\0')
+        written, _ = build(self.checkout, self.output.with_name('with-translator'), REPOSITORY, 'abc123', translator)
+        for name in TRANSLATOR_BUILD_FILES:
+            self.assertIn(f'play/translate/{name}', written)
 
     def test_links_point_at_site_pages_or_pinned_source(self):
         _, unresolved = build(self.checkout, self.output, REPOSITORY, 'abc123')

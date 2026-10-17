@@ -16,9 +16,13 @@ GitHub publication details are in [GITHUB_READY.md](GITHUB_READY.md). The source
 
 This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAssembly. It uses the verified executable and NCAA assets with the inherited PSP web runtime. `NCAA2007` is its internal ELF module name. Both existing build caches select `ncaa10`; do not switch to a God of War corpus to obtain a successful build.
 
-## Documentation site and launcher (2026-10-17)
+## Documentation site, launcher and browser translator (2026-10-17)
 
-`.github/workflows/pages.yml` publishes documentation plus the game-free launcher (`profile/web/launcher/` → `play/`) to GitHub Pages from `main`, assembled by `scripts/build_pages_site.py`. The launcher imports a locally prepared static package into Cache Storage after manifest/hash checks and serves it isolated through `launcher-sw.js`; the package's own picker takes the ISO. Tests: `scripts/test_pages_site.py`, `scripts/test_web_launcher.mjs`, `scripts/test_web_launcher_browser.mjs` (Playwright, synthetic package and ISO). Enable Pages once with **Settings → Pages → Source: GitHub Actions**. Not yet exercised with a real NCAA build or the hosted site; see [Static hosting](docs/STATIC_HOSTING.md#launcher).
+`.github/workflows/pages.yml` publishes documentation, the game-free launcher (`profile/web/launcher/` → `play/`) and the browser translator (`play/translate/`) to GitHub Pages from `main`, assembled by `scripts/build_pages_site.py`. The launcher imports a locally prepared static package into Cache Storage after manifest/hash checks and serves it isolated through `launcher-sw.js`; the package's own picker takes the ISO.
+
+The translator is phase one of in-browser ISO compilation (user chose C, then B). `profile/translator/` holds an independent retail EBOOT decrypter and the Wasm entry points; `scripts/build_translator.sh` builds `build/translator-web/pspweb_translator.{js,wasm}` (unchanged PSPRecomp `codegen_main.cpp` plus decrypter) and native `pspweb_prx_decrypt`/tests. The page decrypts, requires the verified executable SHA-256, runs `--auto` and the audio-program extraction, and offers a repository-layout ZIP. **Not yet run on the real disc**: the first real use validates the decrypter (tag, header layout, gzip/KL4E) and Wasm memory/time on the full executable. Next: phase B, a direct Allegrex-to-WebAssembly backend with equivalence tests against the C++ output, so the browser can compile without clang.
+
+Tests: `scripts/test_pages_site.py`, `scripts/test_web_launcher.mjs`, `scripts/test_web_launcher_browser.mjs`, `build/translator-native/pspweb_translator_tests`, `scripts/test_web_translator.mjs`, `scripts/test_web_translator_browser.mjs`. Enable Pages once with **Settings → Pages → Source: GitHub Actions**. See [Static hosting](docs/STATIC_HOSTING.md#translator).
 
 ## Latest rendering and reference evidence
 

@@ -1,9 +1,10 @@
 name: Pages site
 
-# Publishes the project documentation and the game-free launcher to GitHub
-# Pages. The site is built only from tracked Markdown, the inherited demo media
-# and profile/web/launcher; it never contains game files, generated
-# translations, compiled WebAssembly or a static game package.
+# Publishes the project documentation, the game-free launcher and the browser
+# translator to GitHub Pages. The site is built only from tracked Markdown, the
+# inherited demo media, profile/web and the translator Wasm compiled from
+# PSPRecomp and profile/translator; it never contains game files, generated
+# translations, compiled game WebAssembly or a static game package.
 
 on:
   push:
@@ -12,6 +13,11 @@ on:
       - '*.md'
       - 'docs/**'
       - 'profile/web/launcher/**'
+      - 'profile/web/local_iso.js'
+      - 'profile/translator/**'
+      - 'patches/**'
+      - 'scripts/setup.sh'
+      - 'scripts/build_translator.sh'
       - 'scripts/build_pages_site.py'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
@@ -26,7 +32,10 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
+    env:
+      CC: clang
+      CXX: clang++
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -35,12 +44,17 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Check site assembly and launcher
+      - name: Build the browser translator without game data
+        run: |
+          bash scripts/setup.sh
+          bash scripts/build_translator.sh
+      - name: Check site assembly, launcher and translator
         run: |
           python scripts/test_pages_site.py
           node scripts/test_web_launcher.mjs
-      - name: Assemble documentation
-        run: python scripts/build_pages_site.py --output build/pages-site --strict
+          node scripts/test_web_translator.mjs
+      - name: Assemble site
+        run: python scripts/build_pages_site.py --output build/pages-site --strict --translator build/translator-web
       - uses: actions/configure-pages@v5
       - uses: actions/jekyll-build-pages@v1
         with:

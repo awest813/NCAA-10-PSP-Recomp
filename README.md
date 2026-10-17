@@ -40,7 +40,7 @@ cd NCAA-10-PSP-Recomp
 bash scripts/setup.sh
 ```
 
-Setup fetches the pinned PSPRecomp revision, applies all seven patches, links this profile and installs Emscripten 6.0.10. Supply your own US disc (`ULUS10440`) and the matching decrypted `EBOOT.BIN`; the executable hash is in the [NCAA guide](docs/NCAA10.md#verified-game-identity). Place the decrypted file at `games/ncaa10/root/EBOOT.BIN`, creating those directories first. A retail encrypted executable cannot be used directly.
+Setup fetches the pinned PSPRecomp revision, applies all seven patches, links this profile and installs Emscripten 6.0.10. Supply your own US disc (`ULUS10440`) and the matching decrypted `EBOOT.BIN`; the executable hash is in the [NCAA guide](docs/NCAA10.md#verified-game-identity). Place the decrypted file at `games/ncaa10/root/EBOOT.BIN`, creating those directories first. A retail encrypted executable cannot be used directly, but the [browser translator](https://awest813.github.io/NCAA-10-PSP-Recomp/play/translate/) can produce that file and the generated C++ from your ISO, and `scripts/build_translator.sh` builds the same decrypter natively as `build/translator-native/pspweb_prx_decrypt`, usable as `PSP_DECRYPT`. See [Static hosting](docs/STATIC_HOSTING.md#translator).
 
 On Windows, from PowerShell in the repository root:
 
@@ -122,7 +122,7 @@ scripts/serve.sh mygame                            # http://localhost:8613/
 
 `port.sh` extracts the disc (an ISO, a ZIP containing one, or an already extracted folder), decrypts `PSP_GAME/SYSDIR/EBOOT.BIN`, translates it to C++, writes the manifest for streaming the rest of the disc and builds the page. It takes a few minutes; God of War goes from ZIP to playable page in about four on an 8-core laptop. Add `--native` to also build a headless runner that can dump frames to images and record audio, which is the quickest way to see how far a new game gets.
 
-Executables on retail discs are encrypted. `PSP_DECRYPT` names any tool that is called as `tool <in> <out>` and writes a plain ELF, such as DecEboot or pspdecrypt. PPSSPP can also dump a decrypted executable while it runs a game (Settings, Tools, Developer tools).
+Executables on retail discs are encrypted. `PSP_DECRYPT` names any tool that is called as `tool <in> <out>` and writes a plain ELF, such as DecEboot, pspdecrypt or this project's `pspweb_prx_decrypt` (retail game tags only; KL4E-compressed executables are not supported). PPSSPP can also dump a decrypted executable while it runs a game (Settings, Tools, Developer tools).
 
 The original runtime's two Ready at Dawn ports share an engine; this workspace adds NCAA's separate EA engine. Success with these titles does not establish compatibility with another game. A new title may encounter an unimplemented system call (logged as `[hle] unimplemented ...`) or an unsupported GE feature. [docs/internals.md](docs/internals.md) and [OTHER_RECOMPS.md](OTHER_RECOMPS.md) describe how to investigate and share reusable fixes.
 

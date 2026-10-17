@@ -1,9 +1,10 @@
-"""Assemble the documentation-only GitHub Pages site from tracked Markdown.
+"""Assemble the GitHub Pages site from tracked Markdown and game-free web tools.
 
-The site publishes project documentation, the inherited demo media and the
-game-free launcher under play/. It never contains game files, generated
-translations, compiled WebAssembly or a static game package; players import
-their own locally built package into their browser through the launcher.
+The site publishes project documentation, the inherited demo media, the
+launcher under play/ and the browser translator under play/translate/. It never
+contains game files, generated translations, compiled game WebAssembly or a
+static game package; players import their own build, or translate their own
+ISO, inside their browser.
 """
 import argparse
 import os
@@ -20,7 +21,12 @@ ROOT_PAGES = ('README.md', 'ENGINEERING_LOG.md', 'HANDOFF.md', 'AGENTS.md',
 MEDIA = ('docs/media/demo.webp', 'docs/media/demo.mp4')
 LAUNCHER = 'profile/web/launcher'
 LAUNCHER_SITE = 'play'
-LAUNCHER_FILES = ('index.html', 'launcher.js', 'launcher-sw.js', 'game/index.html')
+LAUNCHER_FILES = ('index.html', 'launcher.js', 'launcher-sw.js', 'game/index.html',
+                  'translate/index.html', 'translate/translate-worker.js', 'translate/translator.js')
+# Game-free translator companions: the shared ISO reader and the Wasm module
+# built by scripts/build_translator.sh (PSPRecomp code generator + decrypter).
+TRANSLATOR_SOURCES = {'translate/local_iso.js': 'profile/web/local_iso.js'}
+TRANSLATOR_BUILD_FILES = ('pspweb_translator.js', 'pspweb_translator.wasm')
 SITE_TITLE = 'NCAA Football 10 PSP Web Recomp'
 SITE_DESCRIPTION = 'Static recompilation of NCAA Football 10 (PSP, ULUS10440) for the web'
 NOTICE = ('> This site hosts the project documentation and a [launcher](play/) for your own build. '
@@ -134,7 +140,7 @@ def current_ref(root):
         return 'main'
 
 
-def build(root, output, repository, ref):
+def build(root, output, repository, ref, translator=None):
     if output.exists():
         raise SystemExit(f'{output} already exists; choose a new output directory')
     pages = page_sources(root)
@@ -156,6 +162,15 @@ def build(root, output, repository, ref):
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(root / LAUNCHER / name, destination)
         written.append(f'{LAUNCHER_SITE}/{name}')
+    for name, source in TRANSLATOR_SOURCES.items():
+        shutil.copyfile(root / source, output / LAUNCHER_SITE / name)
+        written.append(f'{LAUNCHER_SITE}/{name}')
+    if translator is not None:
+        for name in TRANSLATOR_BUILD_FILES:
+            if not (translator / name).is_file():
+                raise SystemExit(f'{translator / name} is missing; run scripts/build_translator.sh')
+            shutil.copyfile(translator / name, output / LAUNCHER_SITE / 'translate' / name)
+            written.append(f'{LAUNCHER_SITE}/translate/{name}')
     (output / '_config.yml').write_text(config(repository), encoding='utf-8', newline='\n')
     written.append('_config.yml')
     return sorted(written), rewriter.unresolved
@@ -167,11 +182,13 @@ def main():
     parser.add_argument('--repository', default=os.environ.get('GITHUB_REPOSITORY', DEFAULT_REPOSITORY))
     parser.add_argument('--ref', help='commit or branch for links to source files (default: HEAD)')
     parser.add_argument('--strict', action='store_true', help='fail on links to files absent from the checkout')
+    parser.add_argument('--translator', type=Path, help='translator build directory to publish (scripts/build_translator.sh)')
     args = parser.parse_args()
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / 'build') or output == ROOT / 'build':
         raise SystemExit('the Pages site output must be a new directory below build/')
-    written, unresolved = build(ROOT, output, args.repository, args.ref or current_ref(ROOT))
+    written, unresolved = build(ROOT, output, args.repository, args.ref or current_ref(ROOT),
+                                args.translator.resolve() if args.translator else None)
     for entry in unresolved:
         print(f'unresolved link: {entry}')
     print(f'wrote {len(written)} files to {output}')

@@ -46,3 +46,37 @@ export function fixture(id = 'ULUS10440') {
   bytes.set(metadata, 23 * 2048); bytes.set(boot, 24 * 2048); bytes.set(payload, 25 * 2048);
   return { bytes, payload, file: new File([bytes], 'NCAA-test.iso') };
 }
+
+// General single-extent ISO9660 image from { 'DIR/FILE.EXT': Uint8Array }.
+// Each directory must fit one sector; enough for synthetic test discs.
+export function isoImage(tree) {
+  const directories = new Map([['', []]]);
+  for (const path of Object.keys(tree).sort()) {
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; ++i) {
+      const dir = parts.slice(0, i).join('/');
+      if (!directories.has(dir)) { directories.set(dir, []); directories.get(parts.slice(0, i - 1).join('/')).push({ name: parts[i - 1], dir }); }
+    }
+    directories.get(parts.slice(0, -1).join('/')).push({ name: parts.at(-1) + ';1', file: path });
+  }
+  let sector = 20;
+  const dirSector = new Map();
+  for (const dir of directories.keys()) dirSector.set(dir, sector++);
+  const fileSector = new Map();
+  for (const [path, data] of Object.entries(tree)) { fileSector.set(path, sector); sector += Math.max(1, Math.ceil(data.length / 2048)); }
+  const bytes = new Uint8Array(sector * 2048), view = new DataView(bytes.buffer);
+  bytes.set([1, ...encoder.encode('CD001'), 1], 16 * 2048); view.setUint16(16 * 2048 + 128, 2048, true);
+  bytes.set(record(0, dirSector.get(''), 2048, true), 16 * 2048 + 156);
+  for (const [dir, entries] of directories) {
+    const parent = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '';
+    const records = [record(0, dirSector.get(dir), 2048, true), record(1, dirSector.get(parent), 2048, true),
+      ...entries.map(entry => entry.dir !== undefined
+        ? record(entry.name, dirSector.get(entry.dir), 2048, true)
+        : record(entry.name, fileSector.get(entry.file), tree[entry.file].length))];
+    let at = dirSector.get(dir) * 2048;
+    for (const item of records) { bytes.set(item, at); at += item.length; }
+    if (at > (dirSector.get(dir) + 1) * 2048) throw new Error('synthetic directory too large: ' + dir);
+  }
+  for (const [path, data] of Object.entries(tree)) bytes.set(data, fileSector.get(path) * 2048);
+  return bytes;
+}

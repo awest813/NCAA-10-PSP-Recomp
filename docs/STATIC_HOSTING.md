@@ -50,11 +50,27 @@ The import persists until **Remove imported build** or site data is cleared, so 
 
 The launcher source is `profile/web/launcher/`. It works on any static HTTPS or localhost host that publishes those files together; it does not need the documentation site.
 
+## Translator
+
+`play/translate/` is phase one of compiling an ISO in the browser. Choose your uncompressed NCAA Football 10 PSP US ISO and the page, in a worker and without uploading anything:
+
+1. indexes the ISO with the same `local_iso.js` reader and requires `ULUS10440`;
+2. converts `PSP_GAME/SYSDIR/EBOOT.BIN` to a plain ELF: an independent implementation of retail executable decryption (tags `0xD91605F0`–`0xD91628F0`, KIRK commands 7 and 1 with SHA-1 and AES-CMAC checks, optional gzip), then **requires the verified executable SHA-256** from `scripts/verify_ncaa10.py` and stops on any other result;
+3. runs the unchanged PSPRecomp code generator, compiled to WebAssembly, with the same `--auto` arguments as `scripts/generate.sh`;
+4. extracts and translates the EA audio programs with a JavaScript port of `scripts/generate_ncaa_sound.py`;
+5. offers a ZIP laid out like the repository: `games/ncaa10/root/EBOOT.BIN`, `profile/generated/ncaa10/`, `profile/generated/ncaa10_sound/` and `TRANSLATION.json` provenance.
+
+Unzip it into a source checkout and build as usual. The Windows script reuses the generated C++ unless `-Generate` is passed. Linux `scripts/port.sh` skips decryption because the executable exists, and regenerates the same C++ natively. Compiling that C++ to game WebAssembly in the browser is the next phase (phase B, a direct Allegrex-to-WebAssembly backend) and is not implemented.
+
+The translator module (`profile/translator/`, built by `scripts/build_translator.sh`) contains no game data; the Pages workflow builds and publishes it. `build/translator-native/pspweb_prx_decrypt <EBOOT.BIN> <out.ELF>` is the same decrypter for native use. The ZIP contains game-derived code from your disc; keep it private.
+
+Checks: `build/translator-native/pspweb_translator_tests` (FIPS-197, RFC 4493, FIPS 180-4 and CRC-32 known answers, gzip checks, synthetic encrypted round trips and rejections), `node scripts/test_web_translator.mjs` (Wasm decryption identical to native; `--auto` output byte-identical to native `psp_recomp`; audio output byte-identical to `generate_ncaa_sound.py`; the full ISO pipeline; hash/title rejection; ZIP read back by Python) and `node scripts/test_web_translator_browser.mjs` (Chromium). The decrypter has only been exercised with synthetic encrypted files built by a test-only encryptor that mirrors it, and its correctness on the real disc is established only by the SHA-256 check at run time. Ordering of audio programs follows POSIX path order, as on Linux.
+
 ## Documentation site
 
-`.github/workflows/pages.yml` publishes the project documentation and the launcher to GitHub Pages on pushes to `main` that change Markdown, `docs/`, `profile/web/launcher/`, the assembler or the workflow, and on manual dispatch. `scripts/build_pages_site.py` copies only the tracked top-level Markdown documents, `docs/*.md`, the two labeled God of War demo media files and the four launcher files into a Jekyll source under `build/`. Links between those pages become site links; links to other source files point to GitHub at the built commit. Each page is Liquid-quoted, and the home page states that the site does not host the game.
+`.github/workflows/pages.yml` publishes the project documentation and the launcher to GitHub Pages on pushes to `main` that change Markdown, `docs/`, the launcher, translator, patches, setup or assembler sources, or the workflow, and on manual dispatch. It runs `scripts/setup.sh` and `scripts/build_translator.sh` first. `scripts/build_pages_site.py` copies only the tracked top-level Markdown documents, `docs/*.md`, the two labeled God of War demo media files, the launcher and translator page files, `local_iso.js` and, with `--translator`, the translator Wasm module into a Jekyll source under `build/`. Links between those pages become site links; links to other source files point to GitHub at the built commit. Each page is Liquid-quoted, and the home page states that the site does not host the game.
 
-The site contains no game executable, generated translation, compiled WebAssembly, boot preload, disc data or saves. Enable it once under the repository's **Settings → Pages → Build and deployment → Source: GitHub Actions**. Check the assembly and launcher locally with:
+The site contains no game executable, generated translation, compiled game WebAssembly, boot preload, disc data or saves. Enable it once under the repository's **Settings → Pages → Build and deployment → Source: GitHub Actions**. Its only WebAssembly is the game-free translator module. Check the assembly and launcher locally with:
 
 ```sh
 python scripts/test_pages_site.py
