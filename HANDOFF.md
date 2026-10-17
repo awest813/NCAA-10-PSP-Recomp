@@ -16,6 +16,10 @@ GitHub publication details are in [GITHUB_READY.md](GITHUB_READY.md). The source
 
 This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAssembly. It uses the verified executable and NCAA assets with the inherited PSP web runtime. `NCAA2007` is its internal ELF module name. Both existing build caches select `ncaa10`; do not switch to a God of War corpus to obtain a successful build.
 
+## Documentation site (2026-10-17)
+
+`.github/workflows/pages.yml` publishes documentation only to GitHub Pages from `main`, assembled by `scripts/build_pages_site.py` and tested by `scripts/test_pages_site.py`. Enable it once with **Settings → Pages → Source: GitHub Actions**. It never contains game code, boot data or saves; see [Static hosting](docs/STATIC_HOSTING.md#documentation-site).
+
 ## Latest rendering and reference evidence
 
 ### Replay performance checkpoint (2026-10-14)

@@ -22,7 +22,7 @@ Cross-Origin-Embedder-Policy: require-corp
 Cross-Origin-Resource-Policy: same-origin
 ```
 
-The included `_headers` file follows the format supported by [Cloudflare Pages](https://developers.cloudflare.com/pages/configuration/headers/) and Netlify. For hosts such as GitHub Pages that do not offer these custom headers, the included pinned [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) supplies the same-origin headers and the bootstrap reloads once before starting the engine. Service workers must be allowed. An existing unrelated service worker in the same scope should be removed or assigned a separate scope. `.nojekyll` is included for Pages uploads; this project does not automatically publish a site.
+The included `_headers` file follows the format supported by [Cloudflare Pages](https://developers.cloudflare.com/pages/configuration/headers/) and Netlify. For hosts such as GitHub Pages that do not offer these custom headers, the included pinned [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) supplies the same-origin headers and the bootstrap reloads once before starting the engine. Service workers must be allowed. An existing unrelated service worker in the same scope should be removed or assigned a separate scope. `.nojekyll` is included for Pages uploads. The repository's own [documentation site](#documentation-site) never publishes a game package; uploading one is a separate, manual choice made with your own build.
 
 Preview with the normal header-enabled server:
 
@@ -37,6 +37,17 @@ python -m http.server 8623 --bind 127.0.0.1 --directory build/static-ncaa10
 ```
 
 Open `http://127.0.0.1:8623/`. Use localhost or HTTPS; `file://` does not work. No `/disc` mount, Range server or application backend is needed.
+
+## Documentation site
+
+`.github/workflows/pages.yml` publishes the project documentation to GitHub Pages on pushes to `main` that change Markdown, `docs/`, the assembler or the workflow, and on manual dispatch. `scripts/build_pages_site.py` copies only the tracked top-level Markdown documents, `docs/*.md` and the two labeled God of War demo media files into a Jekyll source under `build/`. Links between those pages become site links; links to other source files point to GitHub at the built commit. Each page is Liquid-quoted, and the home page states that the site does not host the game.
+
+The site contains no game executable, generated translation, compiled WebAssembly, boot preload, disc data or saves, and it is not a playable page. Enable it once under the repository's **Settings → Pages → Build and deployment → Source: GitHub Actions**. Check the assembly locally with:
+
+```sh
+python scripts/test_pages_site.py
+python scripts/build_pages_site.py --output build/pages-site-check --strict
+```
 
 ## Player flow and saves
 
