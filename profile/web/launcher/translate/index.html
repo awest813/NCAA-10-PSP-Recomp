@@ -106,8 +106,10 @@
     worker.onerror = event => {
       status.textContent = 'The translator stopped: ' + (event.message || 'unknown error');
       status.className = 'error';
+      worker.terminate();
       worker = null;
       input.disabled = false;
+      input.value = '';
     };
     worker.postMessage({ file });
   });

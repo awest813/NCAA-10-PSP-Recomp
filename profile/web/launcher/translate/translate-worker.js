@@ -3,21 +3,33 @@
 'use strict';
 importScripts('local_iso.js', 'pspweb_translator.js', 'translator.js');
 
+// Compile the module once and reuse it for every instance. Streaming needs the
+// application/wasm MIME type; fall back to a buffered compile on other hosts.
 let compiled = null;
-function createModule(options) {
-  if (!compiled) compiled = WebAssembly.compileStreaming(fetch('pspweb_translator.wasm'));
-  return createPspTranslator({
-    ...options,
-    instantiateWasm(imports, success) {
-      compiled.then(module => WebAssembly.instantiate(module, imports).then(instance => success(instance, module)));
-      return {};
-    },
-  });
+async function compile() {
+  const response = await fetch('pspweb_translator.wasm');
+  if (!response.ok) throw new Error('Could not load the translator (HTTP ' + response.status + ').');
+  try {
+    return await WebAssembly.compileStreaming(response.clone());
+  } catch (_) {
+    return WebAssembly.compile(await response.arrayBuffer());
+  }
 }
 
 self.onmessage = async event => {
   const started = performance.now();
   try {
+    if (!compiled) compiled = compile();
+    let module;
+    try { module = await compiled; } catch (error) { compiled = null; throw error; }
+    const createModule = options => createPspTranslator({
+      ...options,
+      instantiateWasm(imports, success) {
+        WebAssembly.instantiate(module, imports).then(instance => success(instance, module),
+          error => self.postMessage({ type: 'error', text: 'Could not start the translator: ' + error.message }));
+        return {};
+      },
+    });
     const result = await PspTranslator.translateIso(event.data.file, {
       createModule, progress: text => self.postMessage({ type: 'progress', text }),
     });

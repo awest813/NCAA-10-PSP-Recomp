@@ -11,6 +11,7 @@
   const NCAA_EBOOT_SHA256 = '2b743dc6d746d822969a9b967b13422a369ff03c6a3a3e2604e051c1642b94f6';
   const LOAD_BASE = '0x08804000', UNIT_SPAN = '0x4000';
   const AUDIO_ROOT = 'psp_game/usrdir/data/audio/aems/';
+  const BANK_MAGIC = Uint8Array.from([0x41, 0x42, 0x4b, 0x43]); // 'ABKC'
   const SOUND_SIGNATURE = Uint8Array.from([0xf8, 0xff, 0xbd, 0x27, 0x00, 0x00, 0xb0, 0xaf, 0x04, 0x00, 0xbf, 0xaf, 0x21, 0x80, 0x80, 0x00]);
   const encoder = new TextEncoder();
   function fail(message) { throw new Error(message); }
@@ -53,7 +54,7 @@
     try {
       const status = module.ccall('pspweb_convert_executable', 'number', ['string', 'string', 'number', 'number'],
         ['/EBOOT.BIN', '/EBOOT.ELF', error, errorSize]);
-      if (status !== 0) fail(module.UTF8ToString ? module.UTF8ToString(error) : 'Could not decrypt the executable.');
+      if (status !== 0) fail(module.UTF8ToString(error));
       return module.FS.readFile('/EBOOT.ELF');
     } finally { module._free(error); }
   }
@@ -64,10 +65,14 @@
     return { files: readTree(run.module.FS, '/out', ''), log: run.log };
   }
 
+  function matchesAt(data, needle, at) {
+    if (at < 0 || at + needle.length > data.length) return false;
+    for (let j = 0; j < needle.length; ++j) if (data[at + j] !== needle[j]) return false;
+    return true;
+  }
   function indexOf(data, needle, from) {
-    outer: for (let i = Math.max(0, from); i + needle.length <= data.length; ++i) {
-      for (let j = 0; j < needle.length; ++j) if (data[i + j] !== needle[j]) continue outer;
-      return i;
+    for (let i = Math.max(0, from); i + needle.length <= data.length; ++i) {
+      if (data[i] === needle[0] && matchesAt(data, needle, i)) return i;
     }
     return -1;
   }
@@ -90,7 +95,7 @@
     for (const { path, read } of [...files].sort((a, b) => comparePaths(a.path, b.path))) {
       const data = await read();
       const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
-      for (let search = 0, bank; (bank = indexOf(data, encoder.encode('ABKC'), search)) >= 0;) {
+      for (let search = 0, bank; (bank = indexOf(data, BANK_MAGIC, search)) >= 0;) {
         search = bank + 4;
         const first = indexOf(data, SOUND_SIGNATURE, bank);
         if (first < 0) continue;
@@ -98,8 +103,8 @@
         for (let offset = bank + 0x70; offset < first; offset += 4) {
           if (offset + 12 > data.length) fail('Truncated audio bank table in ' + path);
           const kind = view.getUint32(offset, true), code = view.getUint32(offset + 4, true), payload = view.getUint32(offset + 8, true);
-          if (kind >= 0x10100 && kind <= 0x101ff && bank + code < data.length &&
-              key(slice(data, bank + code, bank + code + 16)) === key(SOUND_SIGNATURE)) entries.push([code, payload]);
+          // Python compares data[bank+code:bank+code+16], so a signature cut short by the end never matches.
+          if (kind >= 0x10100 && kind <= 0x101ff && matchesAt(data, SOUND_SIGNATURE, bank + code)) entries.push([code, payload]);
         }
         if (!entries.length) continue;
         const starts = [...new Set(entries.map(([code]) => code))].sort((a, b) => a - b);

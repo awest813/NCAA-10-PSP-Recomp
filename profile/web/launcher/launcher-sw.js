@@ -8,6 +8,10 @@ const CACHE = 'ncaa-launcher-build-v1';
 function gameRoot() { return new URL('game/', self.registration.scope).href; }
 
 function isolated(response) {
+  // Navigations fetch with manual redirects, which yields an opaque redirect
+  // (status 0) for e.g. a host's trailing-slash redirect. Such responses cannot
+  // be rebuilt and are returned as they are; the browser follows them.
+  if (response.type === 'opaqueredirect' || response.status === 0) return response;
   const headers = new Headers(response.headers);
   headers.set('Cross-Origin-Opener-Policy', 'same-origin');
   headers.set('Cross-Origin-Embedder-Policy', 'require-corp');

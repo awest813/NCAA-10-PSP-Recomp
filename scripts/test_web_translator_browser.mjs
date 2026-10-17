@@ -91,8 +91,14 @@ try {
   assert.ok(summary.paths.includes('profile/generated/ncaa10_sound/ncaa_sound_000.inc'));
   assert.equal(summary.provenance.executableSha256, expected);
   assert.equal(summary.provenance.audioPrograms, 1);
+  // A missing module reports an error rather than leaving the page waiting.
+  rmSync(path.join(translate, 'pspweb_translator.wasm'));
+  await page.reload();
+  await page.setInputFiles('#iso', isoPath);
+  await page.waitForFunction(() => document.getElementById('status').className === 'error', null, { timeout: 30000 });
+  assert.match(await page.textContent('#status'), /Could not load the translator \(HTTP 404\)/);
   assert.deepEqual(errors, []);
-  console.log('PASS: translator page rejects an unverified executable; Chromium worker decrypts, translates and zips a synthetic ISO');
+  console.log('PASS: translator page rejects an unverified executable; Chromium worker decrypts, translates and zips a synthetic ISO; a missing module is reported');
 } finally {
   await browser.close();
   server.close();

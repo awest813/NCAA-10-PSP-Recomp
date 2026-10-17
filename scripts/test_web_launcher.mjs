@@ -111,7 +111,7 @@ assert.ok(await storedPackage(storage, BASE));
 // Service worker: cached game files with isolation headers, 404s for missing files,
 // the published stub only for game/index.html, and isolated pass-through elsewhere.
 const network = [];
-let fetchHandler;
+let fetchHandler, redirect = null;
 const worker = {
   registration: { scope: BASE }, location: { origin: new URL(BASE).origin },
   addEventListener(type, handler) { if (type === 'fetch') fetchHandler = handler; },
@@ -119,7 +119,10 @@ const worker = {
 };
 vm.runInNewContext(readFileSync(new URL('../profile/web/launcher/launcher-sw.js', import.meta.url), 'utf8'), {
   self: worker, caches: storage, URL, Headers, Response,
-  fetch: async url => { network.push(String(url.url || url)); return new Response('network', { headers: { 'Content-Type': 'text/html' } }); },
+  fetch: async url => {
+    network.push(String(url.url || url));
+    return redirect ? redirect : new Response('network', { headers: { 'Content-Type': 'text/html' } });
+  },
 });
 async function request(url, method = 'GET') {
   let response = null;
@@ -142,6 +145,10 @@ const launcherPage = await request(BASE);
 assert.equal(launcherPage.headers.get('Cross-Origin-Embedder-Policy'), 'require-corp');
 assert.deepEqual(network, [BASE]);
 assert.equal(await request('https://fonts.example.com/font.woff2'), null);
+// A navigation's opaque redirect (status 0) passes through untouched.
+redirect = { type: 'opaqueredirect', status: 0, headers: new Headers() };
+assert.equal(await request(BASE + 'translate'), redirect);
+redirect = null;
 await storage.delete(CACHE);
 assert.equal(await (await request(BASE + 'game/')).text(), 'network');
 assert.equal(network.at(-1), BASE + 'game/index.html');

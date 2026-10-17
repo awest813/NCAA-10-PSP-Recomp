@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import path from 'node:path';
@@ -71,6 +71,12 @@ const types = { '.html': 'text/html', '.js': 'text/javascript', '.wasm': 'applic
 const server = createServer((request, response) => {
   const name = decodeURIComponent(new URL(request.url, 'http://x').pathname);
   const file = path.join(site, name.endsWith('/') ? name + 'index.html' : name);
+  // Like GitHub Pages, redirect a directory requested without its trailing slash.
+  if (!name.endsWith('/') && existsSync(file) && statSync(file).isDirectory()) {
+    response.writeHead(301, { Location: name + '/' });
+    response.end();
+    return;
+  }
   try {
     const body = readFileSync(file);
     response.writeHead(200, { 'Content-Type': types[path.extname(file)] || 'application/octet-stream' });
@@ -118,6 +124,11 @@ try {
 
   await page.reload();
   assert.equal((await launched()).isolated, true, 'the imported build survives a reload');
+
+  // Redirected navigations inside the worker's scope must pass through unchanged.
+  await page.goto(origin + PLAY + 'game');
+  assert.equal(new URL(page.url()).pathname, PLAY + 'game/');
+  assert.equal((await launched()).isolated, true);
 
   await page.goto(origin + PLAY);
   await page.waitForFunction(() => !document.getElementById('remove').disabled);

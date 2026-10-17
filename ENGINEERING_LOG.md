@@ -494,3 +494,14 @@ Checks: native tests pass (FIPS-197 C.1, RFC 4493 examples, FIPS 180-4 examples,
 
 Limitations: no real NCAA ISO has been processed. The decrypter is checked only against a test-only encryptor that mirrors it, so its compatibility with the real executable rests on the public documentation and the mandatory SHA-256 check. Time and memory for `--auto` on the full executable in Wasm are unmeasured, and the 4 GB Wasm memory ceiling applies. Audio-program numbering follows Linux path order; the verified Windows build's order was not compared. No game WebAssembly is compiled in the browser yet; that is phase B. No runtime, generated output or game state changed.
 
+## Launcher and translator audit (2026-10-17)
+
+Audited the Pages, launcher and translator changes. The decrypter was re-checked field by field against the public reference algorithm: header reassembly offsets, the 0x60-byte command 7 span, SHA-1 input order, KIRK header rebuild at offset 0x40, both CMAC ranges and payload offset. No discrepancies were found. Fixes:
+
+- `launcher-sw.js` rebuilt every same-origin response, but navigations use manual redirects, so a host's trailing-slash redirect (GitHub Pages turns `play/translate` into `play/translate/`) arrived as an opaque redirect with status 0 and constructing the replacement threw: the navigation failed with `net::ERR_FAILED`. This was reproduced in Chromium and fixed by passing opaque/status-0 responses through. The browser test server now redirects like Pages, and both the browser and unit tests cover it.
+- `translate-worker.js` compiled the module inside Emscripten's `instantiateWasm`, so a missing or failed module left the page waiting forever. It now compiles before translating, reports HTTP failures, retries after an error, and falls back to a buffered compile when the host serves the wrong MIME type. A Chromium test removes the module and expects the error.
+- The translator page now terminates a crashed worker and clears its input. `translator.js` encodes the bank marker once, compares signatures bytewise (still matching Python's short-slice behavior) and drops a dead fallback.
+- `AGENTS.md` records the translator's invariants.
+
+Checks: native translator tests; `test_web_launcher.mjs`, `test_web_translator.mjs`, both Chromium tests, Pages/local-ISO/source-workflow/static-package/browser logic tests, source audit and a strict site assembly with the translator all pass.
+
