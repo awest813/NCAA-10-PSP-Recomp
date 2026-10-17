@@ -16,9 +16,9 @@ GitHub publication details are in [GITHUB_READY.md](GITHUB_READY.md). The source
 
 This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAssembly. It uses the verified executable and NCAA assets with the inherited PSP web runtime. `NCAA2007` is its internal ELF module name. Both existing build caches select `ncaa10`; do not switch to a God of War corpus to obtain a successful build.
 
-## Documentation site (2026-10-17)
+## Documentation site and launcher (2026-10-17)
 
-`.github/workflows/pages.yml` publishes documentation only to GitHub Pages from `main`, assembled by `scripts/build_pages_site.py` and tested by `scripts/test_pages_site.py`. Enable it once with **Settings → Pages → Source: GitHub Actions**. It never contains game code, boot data or saves; see [Static hosting](docs/STATIC_HOSTING.md#documentation-site).
+`.github/workflows/pages.yml` publishes documentation plus the game-free launcher (`profile/web/launcher/` → `play/`) to GitHub Pages from `main`, assembled by `scripts/build_pages_site.py`. The launcher imports a locally prepared static package into Cache Storage after manifest/hash checks and serves it isolated through `launcher-sw.js`; the package's own picker takes the ISO. Tests: `scripts/test_pages_site.py`, `scripts/test_web_launcher.mjs`, `scripts/test_web_launcher_browser.mjs` (Playwright, synthetic package and ISO). Enable Pages once with **Settings → Pages → Source: GitHub Actions**. Not yet exercised with a real NCAA build or the hosted site; see [Static hosting](docs/STATIC_HOSTING.md#launcher).
 
 ## Latest rendering and reference evidence
 

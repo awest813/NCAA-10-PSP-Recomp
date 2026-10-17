@@ -40,6 +40,7 @@ jobs:
           node scripts/test_web_saves.mjs
           node scripts/test_web_persistence.mjs
           node scripts/test_local_iso.mjs
+          node scripts/test_web_launcher.mjs
           node scripts/test_reference_debugger.mjs
       - name: Reconstruct patched compiler without game data
         run: |
@@ -48,3 +49,18 @@ jobs:
           cmake --build build/tools -j 2
           ctest --test-dir build/tools --output-on-failure
           python scripts/test_ncaa_codegen.py
+
+  launcher-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install Playwright Chromium
+        run: |
+          npm install --no-save --no-package-lock playwright@1.56.1
+          npx playwright install --with-deps chromium
+      - name: Static-host launcher in Chromium
+        run: node scripts/test_web_launcher_browser.mjs

@@ -1,8 +1,9 @@
-name: Documentation site
+name: Pages site
 
-# Publishes the project documentation to GitHub Pages. The site is built only
-# from tracked Markdown and the inherited demo media; it never contains game
-# files, generated translations, compiled WebAssembly or a static game package.
+# Publishes the project documentation and the game-free launcher to GitHub
+# Pages. The site is built only from tracked Markdown, the inherited demo media
+# and profile/web/launcher; it never contains game files, generated
+# translations, compiled WebAssembly or a static game package.
 
 on:
   push:
@@ -10,6 +11,7 @@ on:
     paths:
       - '*.md'
       - 'docs/**'
+      - 'profile/web/launcher/**'
       - 'scripts/build_pages_site.py'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
@@ -30,8 +32,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Check site assembly
-        run: python scripts/test_pages_site.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check site assembly and launcher
+        run: |
+          python scripts/test_pages_site.py
+          node scripts/test_web_launcher.mjs
       - name: Assemble documentation
         run: python scripts/build_pages_site.py --output build/pages-site --strict
       - uses: actions/configure-pages@v5

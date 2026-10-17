@@ -1,8 +1,9 @@
 """Assemble the documentation-only GitHub Pages site from tracked Markdown.
 
-The site publishes project documentation and the inherited demo media. It
-never contains game files, generated translations, compiled WebAssembly or a
-static game package; those stay local under ignored directories.
+The site publishes project documentation, the inherited demo media and the
+game-free launcher under play/. It never contains game files, generated
+translations, compiled WebAssembly or a static game package; players import
+their own locally built package into their browser through the launcher.
 """
 import argparse
 import os
@@ -17,10 +18,14 @@ DEFAULT_REPOSITORY = 'awest813/NCAA-10-PSP-Recomp'
 ROOT_PAGES = ('README.md', 'ENGINEERING_LOG.md', 'HANDOFF.md', 'AGENTS.md',
               'OTHER_RECOMPS.md', 'GITHUB_READY.md', 'THIRD_PARTY_NOTICES.md')
 MEDIA = ('docs/media/demo.webp', 'docs/media/demo.mp4')
+LAUNCHER = 'profile/web/launcher'
+LAUNCHER_SITE = 'play'
+LAUNCHER_FILES = ('index.html', 'launcher.js', 'launcher-sw.js', 'game/index.html')
 SITE_TITLE = 'NCAA Football 10 PSP Web Recomp'
 SITE_DESCRIPTION = 'Static recompilation of NCAA Football 10 (PSP, ULUS10440) for the web'
-NOTICE = ('> This site publishes the project documentation only. It does not host the game, '
-          'compiled game code, disc data or saves. Build and host your own package with '
+NOTICE = ('> This site hosts the project documentation and a [launcher](play/) for your own build. '
+          'It does not host the game, compiled game code, disc data or saves: the launcher imports a '
+          'package you built locally and opens it with your ISO, all inside your browser. See '
           '[Static hosting]({static}).')
 FENCE = re.compile(r'^\s*(```|~~~)')
 MARKDOWN_LINK = re.compile(r'(\]\()([^)\s]+)((?:\s+"[^"]*")?\))')
@@ -146,6 +151,11 @@ def build(root, output, repository, ref):
             (output / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(root / name, output / name)
             written.append(name)
+    for name in LAUNCHER_FILES:
+        destination = output / LAUNCHER_SITE / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / LAUNCHER / name, destination)
+        written.append(f'{LAUNCHER_SITE}/{name}')
     (output / '_config.yml').write_text(config(repository), encoding='utf-8', newline='\n')
     written.append('_config.yml')
     return sorted(written), rewriter.unresolved

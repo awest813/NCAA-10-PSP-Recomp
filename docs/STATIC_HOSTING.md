@@ -22,7 +22,7 @@ Cross-Origin-Embedder-Policy: require-corp
 Cross-Origin-Resource-Policy: same-origin
 ```
 
-The included `_headers` file follows the format supported by [Cloudflare Pages](https://developers.cloudflare.com/pages/configuration/headers/) and Netlify. For hosts such as GitHub Pages that do not offer these custom headers, the included pinned [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) supplies the same-origin headers and the bootstrap reloads once before starting the engine. Service workers must be allowed. An existing unrelated service worker in the same scope should be removed or assigned a separate scope. `.nojekyll` is included for Pages uploads. The repository's own [documentation site](#documentation-site) never publishes a game package; uploading one is a separate, manual choice made with your own build.
+The included `_headers` file follows the format supported by [Cloudflare Pages](https://developers.cloudflare.com/pages/configuration/headers/) and Netlify. For hosts such as GitHub Pages that do not offer these custom headers, the included pinned [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) supplies the same-origin headers and the bootstrap reloads once before starting the engine. Service workers must be allowed. An existing unrelated service worker in the same scope should be removed or assigned a separate scope. `.nojekyll` is included for Pages uploads. The repository's own [documentation site](#documentation-site) never publishes a game package; its [launcher](#launcher) runs a package you import into your browser instead.
 
 Preview with the normal header-enabled server:
 
@@ -38,16 +38,32 @@ python -m http.server 8623 --bind 127.0.0.1 --directory build/static-ncaa10
 
 Open `http://127.0.0.1:8623/`. Use localhost or HTTPS; `file://` does not work. No `/disc` mount, Range server or application backend is needed.
 
+## Launcher
+
+The GitHub Pages site includes a launcher at `play/` (for this repository, <https://awest813.github.io/NCAA-10-PSP-Recomp/play/>). It lets a static host run **your own** build with **your own** ISO without uploading either and without the host carrying any game code:
+
+1. Build NCAA and run `scripts/prepare_static_ncaa.py` as above.
+2. Open the launcher and choose that package folder (or select its files). The launcher reads `static-manifest.json`, requires disc ID `ULUS10440` and the core files (`index.html`, `index.js`, `index.wasm`, `index.data`, `local_iso.js`, `static_bootstrap.js`), checks every selected file's size and SHA-256 against the manifest, the Wasm header and the local-ISO page markers, then stores the verified files in this browser's Cache Storage. Files the manifest does not list, such as an ISO left in the folder, are never read or stored. A plain multi-file selection loses folder names, so optional `licenses/` entries are skipped.
+3. Press **Launch**. `launcher-sw.js` serves the imported files under `play/game/` with COOP/COEP/CORP headers, so the threaded build is cross-origin isolated on hosts without custom headers. Missing game files return 404 instead of falling back to the network. The package's own page then asks for the ISO and runs its usual title and executable-revision checks.
+
+The import persists until **Remove imported build** or site data is cleared, so later visits only need the ISO. Import a new package after rebuilding. A hard reload that bypasses the service worker loads the published `play/game/` stub, which returns to the launcher. Saves belong to the hosting origin, as for any static host. Import only packages you built: an imported page runs with that origin's storage. The launcher holds each file in memory once while hashing it, which needs room for the full `index.wasm`.
+
+The launcher source is `profile/web/launcher/`. It works on any static HTTPS or localhost host that publishes those files together; it does not need the documentation site.
+
 ## Documentation site
 
-`.github/workflows/pages.yml` publishes the project documentation to GitHub Pages on pushes to `main` that change Markdown, `docs/`, the assembler or the workflow, and on manual dispatch. `scripts/build_pages_site.py` copies only the tracked top-level Markdown documents, `docs/*.md` and the two labeled God of War demo media files into a Jekyll source under `build/`. Links between those pages become site links; links to other source files point to GitHub at the built commit. Each page is Liquid-quoted, and the home page states that the site does not host the game.
+`.github/workflows/pages.yml` publishes the project documentation and the launcher to GitHub Pages on pushes to `main` that change Markdown, `docs/`, `profile/web/launcher/`, the assembler or the workflow, and on manual dispatch. `scripts/build_pages_site.py` copies only the tracked top-level Markdown documents, `docs/*.md`, the two labeled God of War demo media files and the four launcher files into a Jekyll source under `build/`. Links between those pages become site links; links to other source files point to GitHub at the built commit. Each page is Liquid-quoted, and the home page states that the site does not host the game.
 
-The site contains no game executable, generated translation, compiled WebAssembly, boot preload, disc data or saves, and it is not a playable page. Enable it once under the repository's **Settings → Pages → Build and deployment → Source: GitHub Actions**. Check the assembly locally with:
+The site contains no game executable, generated translation, compiled WebAssembly, boot preload, disc data or saves. Enable it once under the repository's **Settings → Pages → Build and deployment → Source: GitHub Actions**. Check the assembly and launcher locally with:
 
 ```sh
 python scripts/test_pages_site.py
 python scripts/build_pages_site.py --output build/pages-site-check --strict
+node scripts/test_web_launcher.mjs
+node scripts/test_web_launcher_browser.mjs
 ```
+
+The browser test needs Playwright with Chromium. It serves a synthetic package from a plain server below a Pages-style repository path, without isolation headers. It checks tamper rejection, the isolated cached launch (Wasm streaming, data, a worker and `SharedArrayBuffer`), the real local ISO picker with a synthetic ISO, reload persistence and removal. It does not run the real game; verify an actual build with a real ISO before relying on a deployment.
 
 ## Player flow and saves
 

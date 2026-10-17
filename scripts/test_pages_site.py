@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from build_pages_site import ROOT, build
+from build_pages_site import LAUNCHER, LAUNCHER_FILES, ROOT, build
 
 REPOSITORY = 'example/NCAA-10-PSP-Recomp'
 
@@ -27,6 +27,8 @@ class PagesSiteTests(unittest.TestCase):
         self.write('profile/web/index.wasm', 'game code')
         self.write('games/ncaa10/root/EBOOT.BIN', 'game executable')
         self.write('build/static-ncaa10/index.data', 'boot preload')
+        for name in LAUNCHER_FILES:
+            self.write(f'{LAUNCHER}/{name}', (ROOT / LAUNCHER / name).read_text(encoding='utf-8'))
 
     def write(self, relative, text):
         path = self.checkout / relative
@@ -36,10 +38,13 @@ class PagesSiteTests(unittest.TestCase):
     def read(self, relative):
         return (self.output / relative).read_text(encoding='utf-8')
 
-    def test_site_contains_only_documentation_and_media(self):
+    def test_site_contains_only_documentation_media_and_launcher(self):
         written, _ = build(self.checkout, self.output, REPOSITORY, 'abc123')
         self.assertEqual(written, ['HANDOFF.md', '_config.yml', 'docs/STATIC_HOSTING.md',
-                                   'docs/media/demo.webp', 'index.md'])
+                                   'docs/media/demo.webp', 'index.md', 'play/game/index.html',
+                                   'play/index.html', 'play/launcher-sw.js', 'play/launcher.js'])
+        for name in LAUNCHER_FILES:
+            self.assertEqual(self.read(f'play/{name}'), (ROOT / LAUNCHER / name).read_text(encoding='utf-8'))
         on_disk = sorted(path.relative_to(self.output).as_posix()
                          for path in self.output.rglob('*') if path.is_file())
         self.assertEqual(on_disk, written)
@@ -65,6 +70,7 @@ class PagesSiteTests(unittest.TestCase):
         index = self.read('index.md')
         self.assertTrue(index.startswith('---\nlayout: default\ntitle: "Title"\n---\n{% raw %}\n# Title\n\n> '))
         self.assertIn('does not host the game', index)
+        self.assertIn('[launcher](play/)', index)
         self.assertIn('(docs/STATIC_HOSTING.html)', index)
         self.assertTrue(index.endswith('{% endraw %}\n'))
         self.assertNotIn('does not host the game', self.read('HANDOFF.md'))
