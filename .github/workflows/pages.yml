@@ -1,0 +1,58 @@
+name: Documentation site
+
+# Publishes the project documentation to GitHub Pages. The site is built only
+# from tracked Markdown and the inherited demo media; it never contains game
+# files, generated translations, compiled WebAssembly or a static game package.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*.md'
+      - 'docs/**'
+      - 'scripts/build_pages_site.py'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check site assembly
+        run: python scripts/test_pages_site.py
+      - name: Assemble documentation
+        run: python scripts/build_pages_site.py --output build/pages-site --strict
+      - uses: actions/configure-pages@v5
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: build/pages-site
+          destination: build/pages-output
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/pages-output
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

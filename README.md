@@ -24,6 +24,8 @@ Open <http://127.0.0.1:8621/> and press **Enter for Start**. See the [NCAA guide
 | [Helping other recomps](OTHER_RECOMPS.md) | Reusable fixes, test methods and contribution guidance |
 | [GitHub publication](GITHUB_READY.md) | Published source, snapshot and contribution instructions for awest813/NCAA-10-PSP-Recomp |
 
+The documentation is also published as a [GitHub Pages site](https://awest813.github.io/NCAA-10-PSP-Recomp/) by `.github/workflows/pages.yml`. It hosts documentation only, not the game; see [Static hosting](docs/STATIC_HOSTING.md#documentation-site).
+
 Attribution and dependency licenses are summarized in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 A fresh clone contains source only. Game files, generated translations, build outputs and saves are excluded by `.gitignore`.
