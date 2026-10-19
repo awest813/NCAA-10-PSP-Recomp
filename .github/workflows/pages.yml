@@ -78,10 +78,14 @@ jobs:
           source: build/pages-site
           destination: build/pages-output
       - name: Verify and install the ISO-only launcher
-        run: python scripts/install_pages_player.py --site build/pages-output --archive "build/pages-player-release/$PLAYER_ASSET"
+        run: |
+          # Jekyll's Docker action owns its output as root. Copy into a fresh,
+          # runner-owned tree before overlaying the verified player companions.
+          python -c "import shutil; shutil.copytree('build/pages-output', 'build/pages-deploy')"
+          python scripts/install_pages_player.py --site build/pages-deploy --archive "build/pages-player-release/$PLAYER_ASSET"
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: build/pages-output
+          path: build/pages-deploy
 
   deploy:
     needs: build

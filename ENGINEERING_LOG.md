@@ -531,3 +531,8 @@ Pages assembles docs with `--player` (README at `project.html`, rewritten README
 
 Six installer regressions and seven site-assembly tests pass, along with installing all 15 files of the actual release archive into a fresh local review output. These cover tampering, missing manifest coverage, traversal/extra ISO members, invalid engine/page, provenance path injection and preservation of existing docs. The established header/plain-static browser and real-ISO startup evidence remains valid because the package is unchanged. Final public deployment and HTTPS checks are recorded after publishing.
 
+
+
+### Pages staging permission repair (2026-10-18)
+
+The first hosted player deployment (`76b880f`, Actions run `39181752463`) passed assembly, release download/hash checks and Jekyll, then failed when adding `.nojekyll`: the Docker-produced `build/pages-output` was owned by root. The workflow now copies the rendered documentation into a fresh runner-owned `build/pages-deploy` before the verified overlay and uploads that tree. The runtime release and hashes are unchanged; no permission loosening or overwrite bypass was added. Source checks for the initial deployment commit passed. Public verification follows the repaired deployment.

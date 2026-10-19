@@ -361,3 +361,8 @@ For accuracy, first obtain repeatable reference scenes with the same executable,
 For the 32 MiB issue, compare initialization and allocation/free ordering before the rejected `0x39480` request. The allocator-to-reader null chain is already established; another final-crash-only trace adds little. Use `scripts/analyze_ncaa_heap.py` on complete 32/64 MiB captures and retain request IDs/last writers. Diagnostic setup and exact units are in [crash provenance](docs/NCAA10-CRASH-PROVENANCE.md). Clear trace units and the optimization override before the production regression.
 
 For pacing/audio, use matched live scenes and a long sample. Separate guest step duration, callback gaps, GE queue delay, presentation cadence and audio starvation. Dynasty heavy processing already has reproducible long steps. Preserve real game logic while diagnosing them.
+
+
+### Pages staging permission repair (2026-10-18)
+
+The first hosted player deployment (`76b880f`, Actions run `39181752463`) passed assembly, release download/hash checks and Jekyll, then failed when adding `.nojekyll`: the Docker-produced `build/pages-output` was owned by root. The workflow now copies the rendered documentation into a fresh runner-owned `build/pages-deploy` before the verified overlay and uploads that tree. The runtime release and hashes are unchanged; no permission loosening or overwrite bypass was added. Source checks for the initial deployment commit passed. Public verification follows the repaired deployment.
