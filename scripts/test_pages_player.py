@@ -54,6 +54,15 @@ class PlayerTests(unittest.TestCase):
             install(self.archive, self.site, self.config)
         self.assertEqual(list(self.site.iterdir()), [self.site / 'project.html'])
 
+    def test_existing_provenance_is_not_overwritten(self):
+        self.pack()
+        provenance = self.site / 'player-provenance.json'
+        provenance.write_text('existing deployment')
+        with self.assertRaisesRegex(ValueError, 'replace existing'):
+            install(self.archive, self.site, self.config)
+        self.assertEqual(provenance.read_text(), 'existing deployment')
+        self.assertFalse((self.site / 'index.html').exists())
+
     def test_disc_traversal_and_unlisted_files_rejected_before_extract(self):
         for name in ('game.iso', '../outside.js', '/absolute.js', 'extra.js'):
             with self.subTest(name=name):

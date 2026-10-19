@@ -5,6 +5,20 @@
   const runtime = document.currentScript.dataset.runtime;
   const status = document.getElementById('status');
   const reloadKey = 'ncaa-isolation-reload:' + location.pathname;
+  function reportError(message) {
+    status.textContent = message;
+    status.className = 'status err';
+    const retry = document.getElementById('startup-retry');
+    if (retry) {
+      retry.hidden = false;
+      retry.onclick = () => {
+        // Explicit user retry permits another setup attempt; automatic reloads
+        // retain their guard so a broken host cannot loop indefinitely.
+        try { sessionStorage.removeItem(reloadKey); } catch (_) {}
+        location.reload();
+      };
+    }
+  }
   try {
     if (!globalThis.crossOriginIsolated) {
       if (!globalThis.isSecureContext || !navigator.serviceWorker) {
@@ -45,15 +59,17 @@
     // player selects a File. The prepared launcher downloads no large engine
     // files until the ISO passes the title and executable checks.
     if (globalThis.PSPWEB_LOCAL_ISO && globalThis.PSPWEB_LOCAL_ISO.launcher === 'iso-only-v1') {
+      if (typeof globalThis.WebAssembly !== 'object' || typeof globalThis.SharedArrayBuffer !== 'function') {
+        throw new Error('This browser cannot run the threaded WebAssembly player. Use a current browser with shared memory enabled.');
+      }
       await globalThis.PspLocalIso.prepare({ document, config: globalThis.PSPWEB_LOCAL_ISO });
     }
     const script = document.createElement('script');
     script.src = runtime;
     script.async = true;
-    script.onerror = () => { status.textContent = 'Could not load the game engine. Reload to retry.'; status.className = 'status err'; };
+    script.onerror = () => reportError('Could not load the game engine. Check your connection and retry startup.');
     document.body.appendChild(script);
   } catch (error) {
-    status.textContent = error.message;
-    status.className = 'status err';
+    reportError(error.message);
   }
 })();

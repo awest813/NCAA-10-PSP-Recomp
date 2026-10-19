@@ -119,8 +119,8 @@ console.log('PASS: local ISO indexing/identity/revision, file/raw/tail ranges, m
 // Bootstrap is tested independently of the large game engine: it must gate
 // threaded Wasm until isolation is available, without reload loops.
 const bootstrap = readFileSync(new URL('../profile/web/static_bootstrap.js', import.meta.url), 'utf8');
-async function runBootstrap({isolated = false, secure = true, reloaded = false, storageBlocked = false, registerStalls = false, registerFails = false, launcher = false} = {}) {
-  const status = {}, appended = [], registrations = [];
+async function runBootstrap({isolated = false, secure = true, reloaded = false, storageBlocked = false, registerStalls = false, registerFails = false, launcher = false, sharedMemory = true} = {}) {
+  const status = {}, retry = {hidden: true}, appended = [], registrations = [];
   let reloads = 0, preflights = 0;
   const listeners = new Set(), clearedTimers = [];
   const worker = {controller: null, addEventListener(_, fn) {listeners.add(fn);}, removeEventListener(_, fn) {listeners.delete(fn);},
@@ -133,15 +133,16 @@ async function runBootstrap({isolated = false, secure = true, reloaded = false, 
   const storage = {getItem() {if (storageBlocked) throw new Error('Storage unavailable'); return reloaded ? '1' : null;}, setItem() {},
     removeItem() {if (storageBlocked) throw new Error('Storage unavailable');}};
   await vm.runInNewContext(bootstrap, {crossOriginIsolated: isolated, isSecureContext: secure,
-    document: {currentScript: {dataset: {runtime: 'index.js'}}, getElementById: () => status,
+    document: {currentScript: {dataset: {runtime: 'index.js'}}, getElementById: id => id === 'startup-retry' ? retry : status,
       createElement: () => ({}), body: {appendChild: item => appended.push(item)}},
     location: {pathname: '/ncaa/', href: 'https://example.test/ncaa/', reload() {++reloads;}},
     navigator: {serviceWorker: worker}, sessionStorage: storage, URL,
     setTimeout(callback) {if (registerStalls) queueMicrotask(callback); return 1;},
     clearTimeout(id) {clearedTimers.push(id);},
     PSPWEB_LOCAL_ISO: launcher ? {launcher: 'iso-only-v1'} : null,
+    SharedArrayBuffer: sharedMemory ? SharedArrayBuffer : undefined,
     PspLocalIso: {async prepare() {++preflights; assert.equal(appended.length, 0);}}});
-  return {status, appended, registrations, reloads, listeners, clearedTimers, preflights};
+  return {status, retry, appended, registrations, get reloads() {return reloads;}, listeners, clearedTimers, preflights};
 }
 const direct = await runBootstrap({isolated: true, storageBlocked: true});
 assert.equal(direct.appended[0].src, 'index.js');
@@ -165,4 +166,14 @@ assert.match((await runBootstrap({secure: false})).status.textContent, /HTTPS/);
 const loop = await runBootstrap({reloaded: true});
 assert.equal(loop.reloads, 0); assert.equal(loop.appended.length, 0);
 assert.match(loop.status.textContent, /isolation/);
+assert.equal(loop.retry.hidden, false);
+loop.retry.onclick();
+assert.equal(loop.reloads, 1, 'an explicit retry may reload after an isolation failure');
+const unsupported = await runBootstrap({isolated: true, launcher: true, sharedMemory: false});
+assert.equal(unsupported.preflights, 0);
+assert.equal(unsupported.appended.length, 0);
+assert.match(unsupported.status.textContent, /shared memory/);
+direct.appended[0].onerror();
+assert.equal(direct.retry.hidden, false);
+assert.match(direct.status.textContent, /connection/);
 console.log('PASS: header-enabled bootstrap, blocked storage, subdirectory worker registration, isolation gating, stalled/failed registration cleanup and reload-loop rejection');

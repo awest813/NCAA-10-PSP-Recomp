@@ -81,13 +81,15 @@ def install(archive, site, config):
         targets = [site.joinpath(*PurePosixPath(name).parts) for name in names]
         if any(not target.resolve().is_relative_to(site.resolve()) for target in targets):
             raise ValueError('Player destination escapes the Pages output.')
-        if any(target.exists() for target in targets):
+        provenance = site / 'player-provenance.json'
+        if any(target.exists() or target.is_symlink() for target in [*targets, provenance]):
             raise ValueError('Player would replace existing Pages files; assemble with --player into a fresh output.')
         for name, target in zip(names, targets):
             target.parent.mkdir(parents=True, exist_ok=True)
             with package.open(name) as source, target.open('xb') as destination:
                 shutil.copyfileobj(source, destination)
-    (site / 'player-provenance.json').write_text(json.dumps(config, indent=2) + '\n', encoding='utf-8')
+    with provenance.open('x', encoding='utf-8') as stream:
+        stream.write(json.dumps(config, indent=2) + '\n')
     return names
 
 

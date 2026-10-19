@@ -35,6 +35,11 @@
   .disc-loader input { max-width: 100%; font: inherit; }
   .disc-loader p { margin: 8px 0 0; color: var(--muted); }
   .disc-loader .disc-error { color: var(--err); }
+  html.iso-launcher:not(.engine-ready) .screen,
+  html.iso-launcher:not(.engine-ready) .controls,
+  html.iso-launcher:not(.engine-ready) .actions,
+  html.iso-launcher:not(.engine-ready) .keys,
+  html.iso-launcher:not(.engine-ready) #log { display: none !important; }
   .screen {
     background: #000; border-radius: 10px; overflow: hidden;
     border: 1px solid var(--border); aspect-ratio: 480 / 272; width: 100%;
@@ -181,7 +186,8 @@
   </section>
   <div class="screen"><canvas id="canvas" width="480" height="272" oncontextmenu="event.preventDefault()"></canvas></div>
   <div class="bar">
-    <span id="status" class="status">Loading…</span>
+    <span id="status" class="status" role="status">Loading…</span>
+    <button id="startup-retry" type="button" hidden onclick="location.reload()">Retry startup</button>
     <span id="fps" class="meta"></span>
     <span id="profile" class="meta" hidden></span>
     <span id="note" class="meta"></span>
@@ -303,11 +309,15 @@
   })();
   var Module = {
     pspReady: false,
-    onRuntimeInitialized: function () { Module.pspReady = true; },
+    onRuntimeInitialized: function () {
+      Module.pspReady = true;
+      document.documentElement.classList.add('engine-ready');
+    },
     onAbort: function () {
       Module.pspReady = false;
       statusEl.textContent = 'Game engine could not start. Reload this page to retry.';
       statusEl.className = 'status err';
+      document.getElementById('startup-retry').hidden = false;
     },
     canvas: document.getElementById('canvas'),
     // ?profile: per-frame timing breakdown in the log (see README).
@@ -390,6 +400,13 @@
     }
     if (saveUi.info) {
       if (down && saveKey(e.code)) e.preventDefault();
+      return;
+    }
+    // Leave native picker/button/select keyboard behavior intact. A key
+    // released after focus moves into a control must still be released in game.
+    if (!Module.pspReady || (e.target && e.target.closest &&
+        e.target.closest('input,textarea,select,button,a,[contenteditable]'))) {
+      if (!down) delete held[e.code];
       return;
     }
     if (!(e.code in KEYS) && !(e.code in STICK)) return;
@@ -1009,6 +1026,28 @@
       if (targets.has(target.toUpperCase())) throw new Error('duplicate save ZIP destination');
       targets.add(target.toUpperCase());
       output.push({ name: target, data: f.data });
+    });
+    // Native PSP saves can be encrypted even though the surrounding ZIP is
+    // ordinary. This runtime reads NCAA's plaintext EA database directly.
+    // Reject the recognizable encrypted case before replacing any save files.
+    var imported = new Map(output.map(function (f) { return [f.name.toUpperCase(), f.data]; }));
+    output.forEach(function (f) {
+      if (!/^ULUS10440[^/]*\/PARAM\.SFO$/i.test(f.name)) return;
+      var data = imported.get(f.name.replace(/PARAM\.SFO$/i, 'DATA.BIN').toUpperCase());
+      if (!data || (data[0] === 0x44 && data[1] === 0x42)) return;
+      var bytes = f.data;
+      if (bytes.length < 20) return;
+      var view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (view.getUint32(0, true) !== 0x46535000) return;
+      var keys = view.getUint32(8, true), values = view.getUint32(12, true), count = view.getUint32(16, true);
+      if (count > 1024 || 20 + count * 16 > keys || keys > values || values > bytes.length) return;
+      for (var i = 0; i < count; ++i) {
+        var at = 20 + i * 16, key = keys + view.getUint16(at, true), end = bytes.indexOf(0, key);
+        var start = values + view.getUint32(at + 12, true), size = view.getUint32(at + 4, true);
+        if (key >= values || end < key || end >= values || !size || start + size > bytes.length) continue;
+        if (new TextDecoder().decode(bytes.subarray(key, end)) === 'SAVEDATA_PARAMS' && bytes[start])
+          throw new Error('Encrypted NCAA save detected. Import a decrypted PSP save copy; this player does not decrypt saves.');
+      }
     });
     return output;
   }

@@ -128,6 +128,8 @@ The browser test needs Playwright with Chromium. It serves a synthetic package f
 
 The selected ISO stays on the device. Reads use `File.slice()` for requested file/sector ranges and feed the existing bounded disc cache; the whole ISO is not loaded into WebAssembly memory or uploaded. Choose the file again after reloading. Saves remain in browser storage for that origin. Export saves before changing domain, port, browser profile or clearing site data.
 
+Import save ZIPs containing `PSP/SAVEDATA/<slot>/` (or `<slot>/`) and the save files. Export a backup first: importing replaces matching slots. For an NCAA roster, wait for the successful import message, reload, and select the ISO again so the game loads it at startup. Original PSP saves may be encrypted; the player detects recognizable encrypted NCAA saves and asks for a decrypted copy. ZIP extraction alone does not decrypt savedata. Never publish personal saves or game keys with a static package.
+
 If browser storage cannot restore saves, startup continues with an on-page warning. Automatic writeback stays disabled for that session to protect unrestored browser data. Export any new in-memory saves before reloading. Failed writes also leave a visible warning; a successful later write clears it. Autosaves and imports share a serialized persistence queue. Imports wait for earlier saves before replacing files. Export requires restoration/import completion and reports read errors; a failed read is not reported as an empty save directory. An export is the backup to keep when storage is unavailable or full.
 
 ## Verification

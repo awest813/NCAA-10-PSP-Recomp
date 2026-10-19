@@ -106,7 +106,8 @@ def package(build, output, config):
     if html.count('<head>') != 1:
         raise ValueError('Expected one head element in the built shell.')
     launcher_config = dict(config, launcher='iso-only-v1')
-    html = html.replace('<head>', '<head>\n<script>window.PSPWEB_LOCAL_ISO = ' + json.dumps(launcher_config) + ';</script>', 1)
+    html = html.replace('<head>', '<head>\n<script>window.PSPWEB_LOCAL_ISO = ' + json.dumps(launcher_config) +
+                        ';document.documentElement.classList.add("iso-launcher");</script>', 1)
     html = html.replace('<title>PSP Web Recomp</title>', '<title>NCAA Football 10 — Load ISO</title>')
     html = html.replace('<h1>PSP Web Recomp</h1>', '<h1>NCAA Football 10</h1>')
     html = html.replace('PSP games recompiled for the browser, with graphics, audio, controls and local saves.',
@@ -115,7 +116,7 @@ def package(build, output, config):
                         '<section id="disc-loader" class="disc-loader"')
     html = html.replace('<input id="disc-file" type="file"', '<input id="disc-file" disabled type="file"')
     html = html.replace('<p id="disc-message" role="status"></p>',
-                        '<p id="disc-message" role="status">Preparing browser support. Then choose an uncompressed .iso (ULUS10440). No build import or upload is needed.</p>')
+                        '<p id="disc-message" role="status">Preparing browser support. Then choose an uncompressed .iso (ULUS10440). The ISO stays on your device.</p><p>After loading, press <strong>Enter for Start</strong>, or use the on-screen Start control.</p>')
     html = runtime_tag.sub('<script src="static_bootstrap.js" data-runtime="index.js"></script>', html)
     output.mkdir(parents=True)
     for name in required:

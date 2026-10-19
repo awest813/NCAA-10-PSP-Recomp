@@ -69,6 +69,15 @@ for (const name of ['../DATA.BIN','PSP/SAVEDATA/../DATA.BIN','/TEST/DATA.BIN','C
 assert.throws(() => context.saveImportFiles([{name:'TEST/DATA.BIN',data:payload},{name:'PSP/SAVEDATA/test/data.bin',data:payload}]), /duplicate/);
 const normalized = context.saveImportFiles([{name:'PSP/SAVEDATA/TEST/DATA.BIN',data:payload}]);
 assert.equal(normalized[0].name, 'TEST/DATA.BIN');
+const encryptedSfo = new Uint8Array(20 + 16 + 16 + 128), sfoView = new DataView(encryptedSfo.buffer);
+sfoView.setUint32(0,0x46535000,true); sfoView.setUint32(8,36,true); sfoView.setUint32(12,52,true); sfoView.setUint32(16,1,true);
+sfoView.setUint16(22,4,true); sfoView.setUint32(24,128,true);
+encryptedSfo.set(new TextEncoder().encode('SAVEDATA_PARAMS\0'),36); encryptedSfo[52]=0x41;
+const nativeRoster = [{name:'PSP/SAVEDATA/ULUS10440011/PARAM.SFO',data:encryptedSfo},
+  {name:'PSP/SAVEDATA/ULUS10440011/DATA.BIN',data:payload}];
+assert.throws(()=>context.saveImportFiles(nativeRoster),/Encrypted NCAA save/,'reject before the import mutates files');
+encryptedSfo[52]=0;
+assert.equal(context.saveImportFiles(nativeRoster).length,2,'decrypted save metadata is accepted');
 assert.equal(context.saveImportFiles([{name:'PSP/SAVEDATA/TEST/',data:new Uint8Array()}]).length,0);
 const duplicate = await context.readZip(array(zip(['TEST/DATA.BIN','PSP/SAVEDATA/test/data.bin'])));
 assert.throws(() => context.saveImportFiles(duplicate), /duplicate/);

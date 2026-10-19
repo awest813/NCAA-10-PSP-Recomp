@@ -19,7 +19,20 @@ const context = vm.createContext({
   applyScale() {},
 });
 const focusSource = html.slice(html.indexOf('  function releaseInput()'), html.indexOf('  // Touch controls.'));
-vm.runInContext(mapping + focusSource + source, context);
+const keySource = html.slice(html.indexOf('  function onKey('), html.indexOf("  window.addEventListener('keydown'"));
+vm.runInContext(mapping + focusSource + keySource + source, context);
+let prevented = 0;
+const key = (code, interactive = false) => ({code, target: {closest: () => interactive}, preventDefault() {++prevented;}});
+context.Module.pspReady = false;
+context.onKey(key('Enter'), true);
+assert.equal(prevented, 0, 'Enter must open the native ISO picker before startup');
+context.Module.pspReady = true;
+context.onKey(key('KeyZ'), true);
+assert.equal(context.held.KeyZ, true);
+context.onKey(key('KeyZ', true), false);
+assert.equal(context.held.KeyZ, undefined, 'keyup in a native control releases a prior game key');
+context.onKey(key('Enter', true), true);
+assert.equal(context.held.Enter, undefined, 'focused buttons must keep their native Enter action');
 function poll() { context.pollInput(); return calls.at(-1); }
 function controller(button = -1, axes = [0, 0]) {
   return { buttons: Array.from({ length: 16 }, (_, i) => ({ pressed: i === button })), axes };
