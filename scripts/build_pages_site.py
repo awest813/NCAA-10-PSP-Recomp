@@ -2,9 +2,9 @@
 
 The site publishes project documentation, the inherited demo media, the
 launcher under play/ and the browser translator under play/translate/. It never
-contains game files, generated translations, compiled game WebAssembly or a
-static game package; players import their own build, or translate their own
-ISO, inside their browser.
+copies game files or build outputs from the checkout. With --player, README
+becomes project.html and a separate verified-release installer supplies the
+explicitly published ISO-only player at the root after Jekyll runs.
 """
 import argparse
 import os
@@ -54,9 +54,12 @@ def html_name(destination):
 
 
 class LinkRewriter:
-    def __init__(self, root, pages, repository, ref):
+    def __init__(self, root, pages, repository, ref, player=False):
         self.root = root
+        self.player = player
         self.site = {source: html_name(page_destination(source)) for source in pages}
+        if player:
+            self.site['README.md'] = 'project.html'
         self.site.update({name: name for name in MEDIA})
         self.github = f'https://github.com/{repository}'
         self.ref = ref
@@ -109,7 +112,10 @@ def render_page(rewriter, source, text):
     if source == 'README.md':
         static = rewriter.target(source, 'docs/STATIC_HOSTING.md')
         heading, _, rest = body.partition('\n')
-        body = f'{heading}\n\n{NOTICE.format(static=static)}\n{rest}'
+        notice = (f'> Open the [ISO-only player](./). This site includes the compiled NCAA runtime and verified boot preload; '
+                  f'bring your own matching ISO, which stays local. See [Static hosting]({static}).'
+                  if rewriter.player else NOTICE.format(static=static))
+        body = f'{heading}\n\n{notice}\n{rest}'
     title = title_of(text, PurePosixPath(source).stem).replace('"', '\\"')
     # Wrap content in raw so Jekyll's Liquid pass never interprets documentation text.
     return (f'---\nlayout: default\ntitle: "{title}"\n---\n'
@@ -140,18 +146,19 @@ def current_ref(root):
         return 'main'
 
 
-def build(root, output, repository, ref, translator=None):
+def build(root, output, repository, ref, translator=None, player=False):
     if output.exists():
         raise SystemExit(f'{output} already exists; choose a new output directory')
     pages = page_sources(root)
-    rewriter = LinkRewriter(root, pages, repository, ref)
+    rewriter = LinkRewriter(root, pages, repository, ref, player)
     written = []
     for source in pages:
-        destination = output / page_destination(source)
+        name = 'project.md' if player and source == 'README.md' else page_destination(source)
+        destination = output / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         text = (root / source).read_text(encoding='utf-8')
         destination.write_text(render_page(rewriter, source, text), encoding='utf-8', newline='\n')
-        written.append(page_destination(source))
+        written.append(name)
     for name in MEDIA:
         if (root / name).is_file():
             (output / name).parent.mkdir(parents=True, exist_ok=True)
@@ -183,12 +190,13 @@ def main():
     parser.add_argument('--ref', help='commit or branch for links to source files (default: HEAD)')
     parser.add_argument('--strict', action='store_true', help='fail on links to files absent from the checkout')
     parser.add_argument('--translator', type=Path, help='translator build directory to publish (scripts/build_translator.sh)')
+    parser.add_argument('--player', action='store_true', help='reserve index.html for the verified player; put README at project.html')
     args = parser.parse_args()
     output = args.output.resolve()
     if not output.is_relative_to(ROOT / 'build') or output == ROOT / 'build':
         raise SystemExit('the Pages site output must be a new directory below build/')
     written, unresolved = build(ROOT, output, args.repository, args.ref or current_ref(ROOT),
-                                args.translator.resolve() if args.translator else None)
+                                args.translator.resolve() if args.translator else None, args.player)
     for entry in unresolved:
         print(f'unresolved link: {entry}')
     print(f'wrote {len(written)} files to {output}')

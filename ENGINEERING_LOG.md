@@ -519,3 +519,15 @@ Real-ISO smoke: separate temporary headless Chrome profile, same-process static 
 
 Incoming translator audit: native crypto/synthetic tests pass, but the actual disc EBOOT is rejected as **unsupported tag `0xC0CB167C`**. No verified ELF was produced. The experimental tool is labelled accordingly; retain its mandatory hash gate. Its earlier synthetic evidence does not establish retail support or a playable browser compiler. The independent translator module's Wasm/full browser pipeline was not rebuilt in this checkpoint; existing CI remains responsible for those synthetic checks. This does not affect the player package, which uses the established AOT build. Broader gameplay/audio/controller/rendering gaps remain as below; unfinished ignored replay-copy variants were not integrated.
 
+
+
+## Publishing the player as the Pages homepage (2026-10-18)
+
+The user explicitly requested making the actual ISO-only player the GitHub Pages launcher and pushing all changes. This supersedes the earlier game-free-only Pages restriction. Remote branches were fetched; none had commits outside main. `d0370e5` Source checks and Pages deployment both succeeded before this change.
+
+The approved prepared player is pinned by `docs/PAGES_PLAYER.json`: source `d0370e5f080570562d421adce908997133e2d829`, release `player-20261018-d0370e5`, asset `static-ncaa10-unified-20261018.zip`, SHA-256 `ddf645a98071dcd2652ef5fb1d0d6a12dd8d919caeaff0101ce93334df0c7b49` (21,974,901 bytes). The package carries the tested NCAA AOT engine/verified boot preload, no ISO, extracted disc tree, captures or saves. Binaries are release/deployment assets, never Git source.
+
+Pages assembles docs with `--player` (README at `project.html`, rewritten README links), then overlays the verified release after Jekyll. The site root becomes the one-ISO picker; `/play/` remains the optional developer importer. `install_pages_player.py` verifies the archive SHA, strict member allowlist/size limits, manifest identity/coverage, every companion hash, Wasm magic, launcher markers and safe nonoverwriting destinations before extraction. Corrupt/missing/unexpected releases stop deployment. `player-provenance.json` identifies the deployed engine separately from the current docs/workflow source revision. Future source pushes retain the pinned engine until a newly tested package is explicitly published and the pin updated.
+
+Six installer regressions and seven site-assembly tests pass, along with installing all 15 files of the actual release archive into a fresh local review output. These cover tampering, missing manifest coverage, traversal/extra ISO members, invalid engine/page, provenance path injection and preservation of existing docs. The established header/plain-static browser and real-ISO startup evidence remains valid because the package is unchanged. Final public deployment and HTTPS checks are recorded after publishing.
+

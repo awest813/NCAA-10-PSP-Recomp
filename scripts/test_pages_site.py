@@ -102,6 +102,14 @@ class PagesSiteTests(unittest.TestCase):
         _, unresolved = build(ROOT, output, REPOSITORY, 'abc123')
         self.assertEqual(unresolved, [])
 
+    def test_player_reserves_the_homepage_and_rewrites_readme_links(self):
+        written, _ = build(self.checkout, self.output, REPOSITORY, 'abc123', player=True)
+        self.assertIn('project.md', written)
+        self.assertNotIn('index.md', written)
+        self.assertIn('[Build](project.html#build)', self.read('HANDOFF.md'))
+        self.assertIn('[ISO-only player](./)', self.read('project.md'))
+        self.assertNotIn('does not host the game', self.read('project.md'))
+
 
 if __name__ == '__main__':
     unittest.main()

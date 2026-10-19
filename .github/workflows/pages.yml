@@ -1,10 +1,8 @@
 name: Pages site
 
-# Publishes the project documentation, the game-free launcher and the browser
-# translator to GitHub Pages. The site is built only from tracked Markdown, the
-# inherited demo media, profile/web and the translator Wasm compiled from
-# PSPRecomp and profile/translator; it never contains game files, generated
-# translations, compiled game WebAssembly or a static game package.
+# Publishes the explicitly approved ISO-only player at the site root, together
+# with documentation/developer tools. Large compiled companions come from a
+# hash-pinned release, never Git. No ISO, extracted disc tree or saves are hosted.
 
 on:
   push:
@@ -19,6 +17,7 @@ on:
       - 'scripts/setup.sh'
       - 'scripts/build_translator.sh'
       - 'scripts/build_pages_site.py'
+      - 'scripts/install_pages_player.py'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -51,15 +50,35 @@ jobs:
       - name: Check site assembly, launcher and translator
         run: |
           python scripts/test_pages_site.py
+          python scripts/test_pages_player.py
           node scripts/test_web_launcher.mjs
           node scripts/test_web_translator.mjs
       - name: Assemble site
-        run: python scripts/build_pages_site.py --output build/pages-site --strict --translator build/translator-web
+        run: python scripts/build_pages_site.py --output build/pages-site --strict --translator build/translator-web --player
+      - name: Read pinned player provenance
+        run: |
+          python - <<'PY'
+          import os, sys
+          from pathlib import Path
+          sys.path.insert(0, 'scripts')
+          from install_pages_player import read_config
+          config = read_config(Path('docs/PAGES_PLAYER.json'))
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write('PLAYER_TAG=' + config['tag'] + '\n')
+              stream.write('PLAYER_ASSET=' + config['asset'] + '\n')
+          PY
+      - name: Download the pinned player release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$PLAYER_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$PLAYER_ASSET" --dir build/pages-player-release
       - uses: actions/configure-pages@v5
       - uses: actions/jekyll-build-pages@v1
         with:
           source: build/pages-site
           destination: build/pages-output
+      - name: Verify and install the ISO-only launcher
+        run: python scripts/install_pages_player.py --site build/pages-output --archive "build/pages-player-release/$PLAYER_ASSET"
       - uses: actions/upload-pages-artifact@v3
         with:
           path: build/pages-output

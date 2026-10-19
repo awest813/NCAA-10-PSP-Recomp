@@ -1,5 +1,24 @@
 # Static hosting with a local NCAA ISO
 
+## Published ISO-only player
+
+The [GitHub Pages homepage](https://awest813.github.io/NCAA-10-PSP-Recomp/)
+now deploys the prepared ISO-only launcher. Players supply only their matching
+NCAA US ISO. The site serves the compiled engine and verified boot preload;
+no ISO, extracted disc tree or saves are hosted. Documentation is at
+[project.html](https://awest813.github.io/NCAA-10-PSP-Recomp/project.html).
+
+The user's explicit 2026-10-18 deployment request supersedes the earlier
+source-only Pages setup. `docs/PAGES_PLAYER.json` pins a release tag, asset,
+archive SHA-256 and runtime source commit. `.github/workflows/pages.yml`
+downloads that release, assembles docs with `--player`, runs Jekyll, then uses
+`scripts/install_pages_player.py` to verify the archive and every companion
+before installing the player at the site root. Missing/corrupt releases stop
+deployment. Large binaries stay outside Git; the ISO stays on the player's device.
+To update the player, publish a newly tested static package and update the pin.
+Ordinary source pushes keep the pinned runtime until it is explicitly replaced.
+
+
 The prepared package is the unified player launcher: open its hosted URL,
 select one matching ISO and press **Enter for Start**. No build-folder import,
 translation ZIP, compiler or disc server is needed by the player. The developer
@@ -35,7 +54,7 @@ Cross-Origin-Embedder-Policy: require-corp
 Cross-Origin-Resource-Policy: same-origin
 ```
 
-The included `_headers` file follows the format supported by [Cloudflare Pages](https://developers.cloudflare.com/pages/configuration/headers/) and Netlify. For hosts such as GitHub Pages that do not offer these custom headers, the included pinned [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) supplies the same-origin headers and the bootstrap reloads once before starting the engine. Service workers must be allowed. An existing unrelated service worker in the same scope should be removed or assigned a separate scope. `.nojekyll` is included for Pages uploads. The repository's own [documentation site](#documentation-site) never publishes a game package; its [launcher](#launcher) runs a package you import into your browser instead.
+The included `_headers` file follows the format supported by [Cloudflare Pages](https://developers.cloudflare.com/pages/configuration/headers/) and Netlify. For hosts such as GitHub Pages that do not offer these custom headers, the included pinned [coi-serviceworker](https://github.com/gzuidhof/coi-serviceworker) supplies the same-origin headers and the bootstrap reloads once before starting the engine. Service workers must be allowed. An existing unrelated service worker in the same scope should be removed or assigned a separate scope. `.nojekyll` is included for Pages uploads. The repository's Pages deployment installs the pinned player after Jekyll; the optional [build importer](#launcher) remains available separately.
 
 Preview with the normal header-enabled server:
 
@@ -84,13 +103,13 @@ Unzip it into a source checkout and build as usual. The Windows script reuses th
 
 The translator module (`profile/translator/`, built by `scripts/build_translator.sh`) contains no game data; the Pages workflow builds and publishes it. `build/translator-native/pspweb_prx_decrypt <EBOOT.BIN> <out.ELF>` is the same decrypter for native use. The ZIP contains game-derived code from your disc; keep it private.
 
-Checks: `build/translator-native/pspweb_translator_tests` (FIPS-197, RFC 4493, FIPS 180-4 and CRC-32 known answers, gzip checks, synthetic encrypted round trips and rejections), `node scripts/test_web_translator.mjs` (Wasm decryption identical to native; `--auto` output byte-identical to native `psp_recomp`; audio output byte-identical to `generate_ncaa_sound.py`; the full ISO pipeline; hash/title rejection; ZIP read back by Python) and `node scripts/test_web_translator_browser.mjs` (Chromium). The decrypter has only been exercised with synthetic encrypted files built by a test-only encryptor that mirrors it, and its correctness on the real disc is established only by the SHA-256 check at run time. Ordering of audio programs follows POSIX path order, as on Linux.
+Checks: `build/translator-native/pspweb_translator_tests` (FIPS-197, RFC 4493, FIPS 180-4 and CRC-32 known answers, gzip checks, synthetic encrypted round trips and rejections), `node scripts/test_web_translator.mjs` (Wasm decryption identical to native; `--auto` output byte-identical to native `psp_recomp`; audio output byte-identical to `generate_ncaa_sound.py`; the full ISO pipeline; hash/title rejection; ZIP read back by Python) and `node scripts/test_web_translator_browser.mjs` (Chromium). The synthetic encrypted fixtures use a test-only encryptor that mirrors the implementation. The actual-disc audit now rejects tag `0xC0CB167C`; the mandatory SHA-256 gate remains necessary and no retail decryption success is claimed. Ordering of audio programs follows POSIX path order, as on Linux.
 
 ## Documentation site
 
-`.github/workflows/pages.yml` publishes the project documentation and the launcher to GitHub Pages on pushes to `main` that change Markdown, `docs/`, the launcher, translator, patches, setup or assembler sources, or the workflow, and on manual dispatch. It runs `scripts/setup.sh` and `scripts/build_translator.sh` first. `scripts/build_pages_site.py` copies only the tracked top-level Markdown documents, `docs/*.md`, the two labeled God of War demo media files, the launcher and translator page files, `local_iso.js` and, with `--translator`, the translator Wasm module into a Jekyll source under `build/`. Links between those pages become site links; links to other source files point to GitHub at the built commit. Each page is Liquid-quoted, and the home page states that the site does not host the game.
+`.github/workflows/pages.yml` publishes the project documentation and the launcher to GitHub Pages on pushes to `main` that change Markdown, `docs/`, the launcher, translator, patches, setup or assembler sources, or the workflow, and on manual dispatch. It runs `scripts/setup.sh` and `scripts/build_translator.sh` first. `scripts/build_pages_site.py` copies only the tracked top-level Markdown documents, `docs/*.md`, the two labeled God of War demo media files, the launcher and translator page files, `local_iso.js` and, with `--translator`, the translator Wasm module into a Jekyll source under `build/`. Links between those pages become site links; links to other source files point to GitHub at the built commit. Each documentation page is Liquid-quoted. In the deployed player layout, README becomes `project.html` and links to README point there, leaving the site root for the player.
 
-The site contains no game executable, generated translation, compiled game WebAssembly, boot preload, disc data or saves. Enable it once under the repository's **Settings → Pages → Build and deployment → Source: GitHub Actions**. Its only WebAssembly is the game-free translator module. Check the assembly and launcher locally with:
+After Jekyll finishes, the workflow downloads and installs the hash-pinned player release at the root. The player includes compiled NCAA WebAssembly and verified boot preload, with no ISO, extracted disc tree or saves. Enable Pages under **Settings → Pages → Build and deployment → Source: GitHub Actions**. The game-free documentation assembly can still be tested independently with:
 
 ```sh
 python scripts/test_pages_site.py
