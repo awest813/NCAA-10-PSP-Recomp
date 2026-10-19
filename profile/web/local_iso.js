@@ -112,12 +112,18 @@
       return (await this.bytes(entry.offset + start, end - start + 1, true)).buffer;
     }
   }
-  function install(options) {
-    const { Module, FS, addRunDependency, removeRunDependency, document, config } = options;
+  // Shared by the lightweight launcher and Emscripten preRun. Retain the File
+  // only in this page, so choosing once never copies the ISO into site storage.
+  const selections = new WeakMap();
+  function prepare({ document, config }) {
+    if (selections.has(document)) return selections.get(document);
     const panel = document.getElementById('disc-loader'), input = document.getElementById('disc-file');
     const message = document.getElementById('disc-message'), status = document.getElementById('status');
-    addRunDependency('local-iso');
+    let complete;
+    const ready = new Promise(resolve => { complete = resolve; });
+    selections.set(document, ready);
     panel.hidden = false;
+    input.disabled = false;
     status.textContent = 'Choose your NCAA ISO';
     status.className = 'status';
     message.textContent = 'Select NCAA Football 10 PSP US (ULUS10440). The ISO stays on your device.';
@@ -134,15 +140,11 @@
       try {
         const progress = text => { message.textContent = file.name + ' · ' + text; };
         const disc = await (await IsoDisc.index(file, progress)).verify(config, progress);
-        FS.mkdirTree('/game');
-        FS.writeFile('/game/local-disc.manifest', disc.manifest());
-        Module.pspReadDisc = disc.read.bind(disc);
-        Module.pspLocalDisc = disc;
         message.textContent = file.name + ' · ' + disc.identity.discId + ' · loaded locally';
-        status.textContent = 'Starting NCAA Football 10…';
+        status.textContent = 'Loading NCAA Football 10 engine…';
         started = true;
         console.log('[local-iso] ' + JSON.stringify(disc.identity) + ', entries=' + disc.entries.size);
-        removeRunDependency('local-iso');
+        complete(disc);
       } catch (error) {
         message.textContent = error.message;
         message.className = 'disc-error';
@@ -151,6 +153,24 @@
         input.value = '';
       } finally { busy = false; }
     });
+    return ready;
   }
-  root.PspLocalIso = { IsoDisc, sfo, sha256, install };
+  function install(options) {
+    const { Module, FS, addRunDependency, removeRunDependency, document } = options;
+    addRunDependency('local-iso');
+    return prepare(options).then(disc => {
+      FS.mkdirTree('/game');
+      FS.writeFile('/game/local-disc.manifest', disc.manifest());
+      Module.pspReadDisc = disc.read.bind(disc);
+      Module.pspLocalDisc = disc;
+      document.getElementById('status').textContent = 'Starting NCAA Football 10…';
+      removeRunDependency('local-iso');
+    }).catch(error => {
+      // Keep startup gated if the manifest could not be installed.
+      const status = document.getElementById('status');
+      status.textContent = 'Could not mount the local ISO. Reload to retry. ' + error.message;
+      status.className = 'status err';
+    });
+  }
+  root.PspLocalIso = { IsoDisc, sfo, sha256, prepare, install };
 })(globalThis);

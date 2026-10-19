@@ -1,6 +1,6 @@
 # NCAA Football 10 PSP Web Recomp — handoff
 
-Snapshot: 2026-10-14. Read [ENGINEERING_LOG.md](ENGINEERING_LOG.md) for verified history and [AGENTS.md](AGENTS.md) before editing.
+Snapshot: 2026-10-18. Read [ENGINEERING_LOG.md](ENGINEERING_LOG.md) for verified history and [AGENTS.md](AGENTS.md) before editing.
 
 ## Start here
 
@@ -16,11 +16,23 @@ GitHub publication details are in [GITHUB_READY.md](GITHUB_READY.md). The source
 
 This is NCAA Football 10 PSP US (`ULUS10440`) statically recompiled to C++/WebAssembly. It uses the verified executable and NCAA assets with the inherited PSP web runtime. `NCAA2007` is its internal ELF module name. Both existing build caches select `ncaa10`; do not switch to a God of War corpus to obtain a successful build.
 
+## Unified ISO-only launcher and incoming merge (2026-10-18)
+
+Fetched and fast-forwarded publication main from `30617d4` through `2579049`, including the Pages/build-importer/phase-one translator work. The active source matched the publication baseline before integration. All 35 incoming changed source files were integrated; game files, generated code, earlier performance variants, builds, browser origins and savedata were preserved.
+
+Player entry point: **`build/static-ncaa10-unified-20261018/index.html` served over localhost/HTTPS**. Its 14 companions include compiled NCAA/verified boot data, with no ISO or savedata. The lightweight unified page finishes cross-origin isolation, validates one local ISO, then loads the engine. `PspLocalIso.prepare` retains the verified File/index for preRun; no second picker, full-disc copy or build import is required. Wrong discs remain retryable. The Windows build script's `-Serve` now packages to a new timestamped output and serves this flow without `/disc`; `-StaticOutput` selects an explicit new package directory. The source-only Pages importer remains optional; translator links are under developer tools, outside the prepared player package.
+
+Verification: web target rebuilt; exact ULUS10440 ELF identity, 8 package tests, 7 source-workflow tests, 6 Pages tests, 8 browser logic scripts and PowerShell syntax pass. Headless Chrome verifies the actual shell on header-enabled and plain static subdirectory paths: isolation before selection, no engine request for a wrong ISO, successful retry, shared selected index, local range bridge, reload requiring reselection and a preserved storage marker. The merged build importer separately passes its Chromium import/tamper/cache/isolation/Wasm/worker/reload/removal check. CI now runs the unified launcher browser regression. Browser test scripts accept `NODE_PATH` and `PSPWEB_BROWSER_EXECUTABLE` for locally installed test dependencies/browsers; no active user profile is used.
+
+Real-ISO smoke: separate temporary headless Chrome profile, same-process static server, **64 MiB guest / 56 MiB user**, Running, 58 local range reads / 15,204,352 bytes (largest 262,144), no disc HTTP requests/page errors. Enter was pressed; final screenshot is the Road to Glory intro/info page, **not gameplay**. The short displayed 29.6 FPS / 100% speed is startup only, not a sustained gameplay measurement. Evidence: `build/unified-launcher-smoke-20261018.{mjs,json}`, `build/unified-launcher-20261018.png`, `build/ncaa-unified-launcher-web-build.log`. Existing active browser and saves were untouched.
+
+Incoming translator audit: native crypto/synthetic tests pass, but the actual disc EBOOT is rejected as **unsupported tag `0xC0CB167C`**. No verified ELF was produced. The experimental tool is labelled accordingly; retain its mandatory hash gate. Its earlier synthetic evidence does not establish retail support or a playable browser compiler. The independent translator module's Wasm/full browser pipeline was not rebuilt in this checkpoint; existing CI remains responsible for those synthetic checks. This does not affect the player package, which uses the established AOT build. Broader gameplay/audio/controller/rendering gaps remain as below; unfinished ignored replay-copy variants were not integrated.
+
 ## Documentation site, launcher and browser translator (2026-10-17)
 
 `.github/workflows/pages.yml` publishes documentation, the game-free launcher (`profile/web/launcher/` → `play/`) and the browser translator (`play/translate/`) to GitHub Pages from `main`, assembled by `scripts/build_pages_site.py`. The launcher imports a locally prepared static package into Cache Storage after manifest/hash checks and serves it isolated through `launcher-sw.js`; the package's own picker takes the ISO.
 
-The translator is phase one of in-browser ISO compilation (user chose C, then B). `profile/translator/` holds an independent retail EBOOT decrypter and the Wasm entry points; `scripts/build_translator.sh` builds `build/translator-web/pspweb_translator.{js,wasm}` (unchanged PSPRecomp `codegen_main.cpp` plus decrypter) and native `pspweb_prx_decrypt`/tests. The page decrypts, requires the verified executable SHA-256, runs `--auto` and the audio-program extraction, and offers a repository-layout ZIP. **Not yet run on the real disc**: the first real use validates the decrypter (tag, header layout, gzip/KL4E) and Wasm memory/time on the full executable. Next: phase B, a direct Allegrex-to-WebAssembly backend with equivalence tests against the C++ output, so the browser can compile without clang.
+The translator is phase one of in-browser ISO compilation (user chose C, then B). `profile/translator/` holds an independent retail EBOOT decrypter and the Wasm entry points; `scripts/build_translator.sh` builds `build/translator-web/pspweb_translator.{js,wasm}` (unchanged PSPRecomp `codegen_main.cpp` plus decrypter) and native `pspweb_prx_decrypt`/tests. The page decrypts, requires the verified executable SHA-256, runs `--auto` and the audio-program extraction, and offers a repository-layout ZIP. **Historical status at this entry:** not yet run on the real disc. The 2026-10-18 audit above now confirms the tested real disc is rejected; retail support remains incomplete. Next: phase B, a direct Allegrex-to-WebAssembly backend with equivalence tests against the C++ output, so the browser can compile without clang.
 
 Tests: `scripts/test_pages_site.py`, `scripts/test_web_launcher.mjs`, `scripts/test_web_launcher_browser.mjs`, `build/translator-native/pspweb_translator_tests`, `scripts/test_web_translator.mjs`, `scripts/test_web_translator_browser.mjs`. Enable Pages once with **Settings → Pages → Source: GitHub Actions**. See [Static hosting](docs/STATIC_HOSTING.md#translator).
 

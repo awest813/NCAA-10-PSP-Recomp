@@ -41,6 +41,7 @@ class StaticPackageTests(unittest.TestCase):
         self.assertFalse((self.output / 'private.iso').exists())
         html = (self.output / 'index.html').read_text(encoding='utf-8')
         self.assertIn('window.PSPWEB_LOCAL_ISO', html)
+        self.assertIn('"launcher": "iso-only-v1"', html)
         self.assertIn('data-runtime="index.js"', html)
         self.assertIn('<h1>NCAA Football 10</h1>', html)
         self.assertTrue((self.output / 'coi-serviceworker.js').is_file())
@@ -50,6 +51,7 @@ class StaticPackageTests(unittest.TestCase):
         self.assertNotIn('](profile/', notices)
         guide = (self.output / 'HOSTING.md').read_text(encoding='utf-8')
         self.assertIn('--directory .', guide)
+        self.assertIn('unified, ISO-only player launcher', guide)
         manifest = json.loads((self.output / 'static-manifest.json').read_text())
         for item in manifest['files']:
             self.assertEqual(sha256(self.output / item['path']), item['sha256'])

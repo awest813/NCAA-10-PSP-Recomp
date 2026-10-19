@@ -1,5 +1,18 @@
 # Static hosting with a local NCAA ISO
 
+The prepared package is the unified player launcher: open its hosted URL,
+select one matching ISO and press **Enter for Start**. No build-folder import,
+translation ZIP, compiler or disc server is needed by the player. The developer
+builds and packages the engine once; all runtime companions must stay together.
+Browser isolation finishes before the picker opens, avoiding a lost selection
+on the service-worker reload. The lightweight page checks the ISO before
+downloading the large engine. Wrong-disc errors allow retry on the same page.
+
+On Windows, `scripts/build_ncaa_web.ps1 -Iso 'C:/path/game.iso' -Serve` now
+packages into a fresh timestamped folder and serves this ISO-only flow.
+Use `-StaticOutput build/my-new-launcher` to choose the package path explicitly,
+with or without `-Serve`. Existing output directories are preserved.
+
 Build the NCAA web target using the [fresh-checkout instructions](../README.md#build-ncaa-from-a-fresh-checkout), then run from the repository root:
 
 ```sh
@@ -51,6 +64,13 @@ The import persists until **Remove imported build** or site data is cleared, so 
 The launcher source is `profile/web/launcher/`. It works on any static HTTPS or localhost host that publishes those files together; it does not need the documentation site.
 
 ## Translator
+
+**Experimental, outside the player flow.** The 2026-10-18 native audit of the
+actual matching local disc rejected encryption tag `0xC0CB167C`. Synthetic crypto
+tests pass, but they do not establish retail-disc support. Use the existing
+verified native build and unified package to play. The earlier phase-one
+implementation below is retained as development work, with mandatory executable
+hash checks intact; browser compilation into a playable engine remains absent.
 
 `play/translate/` is phase one of compiling an ISO in the browser. Choose your uncompressed NCAA Football 10 PSP US ISO and the page, in a worker and without uploading anything:
 

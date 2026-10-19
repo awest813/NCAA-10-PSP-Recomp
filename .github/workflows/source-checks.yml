@@ -77,4 +77,5 @@ jobs:
       - name: Launcher and translator in Chromium
         run: |
           node scripts/test_web_launcher_browser.mjs
+          node scripts/test_iso_launcher_browser.mjs
           node scripts/test_web_translator_browser.mjs

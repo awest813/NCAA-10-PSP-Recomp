@@ -52,8 +52,13 @@
     <input id="build-files" type="file" multiple aria-describedby="build-message">
     <p id="build-message" role="status"></p>
     <p id="build-summary">Checking for an imported build…</p>
-    <p>No decrypter or code generator? The <a href="translate/">translator</a> turns your ISO into the decrypted executable and generated C++ in this browser.</p>
+    <p>Players using a prepared static game site only need its ISO picker. This source-only site is an optional build importer.</p>
   </section>
+
+  <details>
+    <summary>Developer tools</summary>
+    <p>The experimental <a href="translate/">translator</a> exports build inputs and currently rejects the tested NCAA disc's encryption tag. It cannot create or launch a playable web build by itself; a native build toolchain is still required.</p>
+  </details>
 
   <section aria-labelledby="step-play">
     <h2 id="step-play">2. Launch and choose your ISO</h2>

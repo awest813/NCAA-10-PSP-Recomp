@@ -41,6 +41,12 @@
     }
     // Header-enabled hosts do not need storage for the one-reload guard.
     try { sessionStorage.removeItem(reloadKey); } catch (_) {}
+    // Do browser isolation first: its one-time reload must happen before a
+    // player selects a File. The prepared launcher downloads no large engine
+    // files until the ISO passes the title and executable checks.
+    if (globalThis.PSPWEB_LOCAL_ISO && globalThis.PSPWEB_LOCAL_ISO.launcher === 'iso-only-v1') {
+      await globalThis.PspLocalIso.prepare({ document, config: globalThis.PSPWEB_LOCAL_ISO });
+    }
     const script = document.createElement('script');
     script.src = runtime;
     script.async = true;

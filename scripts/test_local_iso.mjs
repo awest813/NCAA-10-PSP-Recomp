@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import { boot, config, fixture, record } from './iso_fixture.mjs';
 await import('../profile/web/local_iso.js');
-const { IsoDisc, install } = globalThis.PspLocalIso;
+const { IsoDisc, prepare, install } = globalThis.PspLocalIso;
 const sample = fixture();
 const progress = [];
 const disc = await (await IsoDisc.index(sample.file,stage=>progress.push(stage))).verify(config,stage=>progress.push(stage));
@@ -74,6 +74,25 @@ assert.equal(dependencies, 0); assert.equal(input.disabled, true);
 assert.match(written.get('/game/local-disc.manifest'), /__umd.iso/);
 await input.handlers.change(); assert.equal(dependencies, 0, 'startup dependency is released once');
 
+// The unified launcher verifies once before loading the engine. preRun must
+// consume that same File/index, without asking again or reading the ISO twice.
+const preflightElements = new Map(['disc-loader', 'disc-file', 'disc-message', 'status'].map(id => [id, new Element()]));
+const preflightDocument = { getElementById(id) { return preflightElements.get(id); } };
+const ready = prepare({ document: preflightDocument, config });
+assert.equal(prepare({ document: preflightDocument, config }), ready);
+const preflightInput = preflightElements.get('disc-file');
+preflightInput.files = [sample.file];
+await preflightInput.handlers.change();
+const selectedDisc = await ready;
+let preflightDependencies = 0;
+const preflightModule = {};
+await install({ Module: preflightModule, FS: { mkdirTree() {}, writeFile() {} },
+  addRunDependency() { ++preflightDependencies; }, removeRunDependency() { --preflightDependencies; },
+  document: preflightDocument, config });
+assert.equal(preflightDependencies, 0);
+assert.equal(preflightModule.pspLocalDisc, selectedDisc);
+assert.equal(selectedDisc.stats.gameReads, 0, 'preflight must not preload game payloads');
+
 // Execute the actual EM_JS implementation so a local read cannot accidentally
 // fall through to HTTP, and HTTP 200 fallback still respects the byte offset.
 const cpp = readFileSync(new URL('../profile/host/webfs.cpp', import.meta.url), 'utf8');
@@ -100,9 +119,9 @@ console.log('PASS: local ISO indexing/identity/revision, file/raw/tail ranges, m
 // Bootstrap is tested independently of the large game engine: it must gate
 // threaded Wasm until isolation is available, without reload loops.
 const bootstrap = readFileSync(new URL('../profile/web/static_bootstrap.js', import.meta.url), 'utf8');
-async function runBootstrap({isolated = false, secure = true, reloaded = false, storageBlocked = false, registerStalls = false, registerFails = false} = {}) {
+async function runBootstrap({isolated = false, secure = true, reloaded = false, storageBlocked = false, registerStalls = false, registerFails = false, launcher = false} = {}) {
   const status = {}, appended = [], registrations = [];
-  let reloads = 0;
+  let reloads = 0, preflights = 0;
   const listeners = new Set(), clearedTimers = [];
   const worker = {controller: null, addEventListener(_, fn) {listeners.add(fn);}, removeEventListener(_, fn) {listeners.delete(fn);},
     async register(url, options) {
@@ -119,12 +138,16 @@ async function runBootstrap({isolated = false, secure = true, reloaded = false, 
     location: {pathname: '/ncaa/', href: 'https://example.test/ncaa/', reload() {++reloads;}},
     navigator: {serviceWorker: worker}, sessionStorage: storage, URL,
     setTimeout(callback) {if (registerStalls) queueMicrotask(callback); return 1;},
-    clearTimeout(id) {clearedTimers.push(id);}});
-  return {status, appended, registrations, reloads, listeners, clearedTimers};
+    clearTimeout(id) {clearedTimers.push(id);},
+    PSPWEB_LOCAL_ISO: launcher ? {launcher: 'iso-only-v1'} : null,
+    PspLocalIso: {async prepare() {++preflights; assert.equal(appended.length, 0);}}});
+  return {status, appended, registrations, reloads, listeners, clearedTimers, preflights};
 }
 const direct = await runBootstrap({isolated: true, storageBlocked: true});
 assert.equal(direct.appended[0].src, 'index.js');
 assert.equal(direct.registrations.length, 0);
+assert.equal((await runBootstrap({isolated: true, launcher: true})).preflights, 1);
+assert.equal((await runBootstrap({launcher: true})).preflights, 0, 'select the File only after the isolation reload');
 const fallback = await runBootstrap();
 assert.equal(fallback.registrations[0].url, 'https://example.test/ncaa/coi-serviceworker.js');
 assert.equal(fallback.registrations[0].options.scope, './');

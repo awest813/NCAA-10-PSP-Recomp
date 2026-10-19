@@ -6,6 +6,7 @@ param(
     [string]$CMake = "cmake",
     [ValidateRange(1, 256)][int]$Jobs = 4,
     [switch]$Generate,
+    [string]$StaticOutput,
     [switch]$Serve,
     [int]$Port = 8621
 )
@@ -60,5 +61,10 @@ try {
         '-DPSPWEB_INSTRUCTION_TRACE_UNITS=','-DPSPWEB_INSTRUCTION_TRACE_OPT_LEVEL=')
     Run $CMake @('--build','build/web-ncaa10','--target','pspweb','-j',"$Jobs")
     Write-Host "Built NCAA Football 10: $Root/build/web-ncaa10/profiles/web/index.html"
-    if ($Serve) { Run $Python @('scripts/serve.py','build/web-ncaa10/profiles/web',"$Port",'--mount',"/disc=$Disc") }
+    if ($Serve -or $StaticOutput) {
+        if (-not $StaticOutput) { $StaticOutput = 'build/static-ncaa10-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') }
+        Run $Python @('scripts/prepare_static_ncaa.py','--output',$StaticOutput)
+        Write-Host "ISO-only launcher: $Root/$StaticOutput/index.html"
+        if ($Serve) { Run $Python @('scripts/serve.py',$StaticOutput,"$Port") }
+    }
 } finally { Pop-Location }

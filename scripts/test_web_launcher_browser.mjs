@@ -13,6 +13,7 @@ import { config, fixture } from './iso_fixture.mjs';
 
 async function loadPlaywright() {
   try { return await import('playwright'); } catch (_) {}
+  try { return createRequire(import.meta.url)('playwright'); } catch (_) {}
   return createRequire(path.join(execSync('npm root -g').toString().trim(), 'noop.js'))('playwright');
 }
 const { chromium } = await loadPlaywright();
@@ -86,7 +87,7 @@ const server = createServer((request, response) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}`;
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.PSPWEB_BROWSER_EXECUTABLE ? { executablePath: process.env.PSPWEB_BROWSER_EXECUTABLE } : {});
 try {
   const page = await browser.newPage();
   const errors = [];

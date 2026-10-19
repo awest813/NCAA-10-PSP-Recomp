@@ -105,9 +105,17 @@ def package(build, output, config):
         raise ValueError('Expected one external index.js runtime script in the built shell.')
     if html.count('<head>') != 1:
         raise ValueError('Expected one head element in the built shell.')
-    html = html.replace('<head>', '<head>\n<script>window.PSPWEB_LOCAL_ISO = ' + json.dumps(config) + ';</script>', 1)
+    launcher_config = dict(config, launcher='iso-only-v1')
+    html = html.replace('<head>', '<head>\n<script>window.PSPWEB_LOCAL_ISO = ' + json.dumps(launcher_config) + ';</script>', 1)
     html = html.replace('<title>PSP Web Recomp</title>', '<title>NCAA Football 10 — Load ISO</title>')
     html = html.replace('<h1>PSP Web Recomp</h1>', '<h1>NCAA Football 10</h1>')
+    html = html.replace('PSP games recompiled for the browser, with graphics, audio, controls and local saves.',
+                        'Select your NCAA Football 10 PSP US ISO to play. Graphics, audio, controls and saves run in your browser.')
+    html = html.replace('<section id="disc-loader" class="disc-loader" hidden',
+                        '<section id="disc-loader" class="disc-loader"')
+    html = html.replace('<input id="disc-file" type="file"', '<input id="disc-file" disabled type="file"')
+    html = html.replace('<p id="disc-message" role="status"></p>',
+                        '<p id="disc-message" role="status">Preparing browser support. Then choose an uncompressed .iso (ULUS10440). No build import or upload is needed.</p>')
     html = runtime_tag.sub('<script src="static_bootstrap.js" data-runtime="index.js"></script>', html)
     output.mkdir(parents=True)
     for name in required:
@@ -134,10 +142,14 @@ Netlify and Cloudflare Pages can use `_headers`. Hosts without custom headers
 use the included same-origin isolation service worker and reload once before
 loading the engine. WebAssembly requires the `application/wasm` MIME type.
 
-Open the page, choose a matching NCAA Football 10 PSP US ISO (ULUS10440), then
+This is the unified, ISO-only player launcher. Open index.html through your
+host URL, choose a matching NCAA Football 10 PSP US ISO (ULUS10440), then
 press Enter for Start. Use an uncompressed `.iso`; ZIP/CSO/ZSO are unsupported
 in the browser picker. The ISO is read locally in ranges and is not uploaded.
 Choose it again after a reload. Export saves before changing the hosting origin.
+Browser isolation is prepared before file selection. The ISO is checked before
+the large engine downloads; a wrong image can be replaced on the same page.
+Players do not need the separate build importer, translator or development tools.
 
 This is the NCAA AOT build, not a generic PSP emulator. It contains compiled
 game-specific WebAssembly and verified boot data, but no full ISO, extracted

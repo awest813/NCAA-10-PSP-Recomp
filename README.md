@@ -1,6 +1,6 @@
 # NCAA Football 10 PSP Web Recomp
 
-For a static host with a browser ISO picker, see [Static hosting](docs/STATIC_HOSTING.md). After building NCAA, `python scripts/prepare_static_ncaa.py --output build/static-ncaa10` prepares a self-contained web folder. Players select a matching US ISO locally; no disc server or upload is needed. The package includes the game-specific compiled build and verified boot preload.
+For the unified ISO-only launcher, see [Static hosting](docs/STATIC_HOSTING.md). After building NCAA, `python scripts/prepare_static_ncaa.py --output build/static-ncaa10` prepares a self-contained web folder. Serve that folder, select a matching US ISO, then press **Enter for Start**. Players need no build import, translator or developer tools. The package includes the game-specific compiled build and verified boot preload; the ISO stays local. Browser isolation is prepared before file selection, and the engine downloads only after disc validation.
 
 This working project targets **NCAA Football 10 for PSP, US release ULUS10440**, running in the browser. Its decrypted Allegrex/MIPS executable is statically translated into C++, compiled to WebAssembly, and linked with the PSP kernel and WebGL2 graphics implementation in this project. It runs the game's own code and assets; gameplay does not use a PSP CPU interpreter or JIT.
 
