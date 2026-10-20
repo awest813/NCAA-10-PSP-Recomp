@@ -1,5 +1,14 @@
 # NCAA Football 10 PSP Web Recomp — handoff
 
+## Audio recovery and pacing audit (2026-10-20)
+
+Current package: `build/static-ncaa10-audio-polish-20261020`. AudioWorklet starvation, reset, re-prime and overrun splices now use bounded two-millisecond transitions; stale drift correction clears on starvation. The 100 ms target, 250 ms cap, exact drops and starvation counters remain. At 48 kHz the deterministic opposite-polarity interruption test's peak adjacent sample step falls from 1.5 to 0.015625, with identical starvation/overrun/drop results. Load/processor failure closes the failed graph, releases its Blob URL and allows another user gesture to retry; rejected resumes are handled.
+
+Fresh Chrome 155.0.8059.85 / 48 kHz sessions verify real ISO startup, stadium entry, kickoff and subsequent play selection without page errors. The rebuilt player's final 45-second sample has nine stable accumulated underruns and zero overruns/drops, with sampled median 29.5 FPS; startup/loading had already incurred starvation, including a 2.349 s delivery gap. This does not prove uninterrupted or perceptually equivalent audio. A sequential 3x/2x/native/3x scene test held median 30.0/29.9/30.0/30.0 FPS and did not justify changing resolution defaults. Earlier stadium phases show long tasks and graphics queue delays. The underlying loading and presentation stalls remain open. See [the full audit](docs/AUDIO_PACING.md) for rates, limits and private evidence paths.
+
+Web relink, exact title verification, eight static-package cases, seven Pages installer/source-workflow cases, audio/input/save/persistence/OSK/local-ISO logic and actual-shell header/plain-host Chrome checks pass. Guest instructions, mixer, renderer, scheduling, saves and default 64 MiB/56 MiB layout are unchanged; package Wasm and boot data are byte-identical to the previously published package. Production trace-unit flags remain empty. Source-only publication excludes all private captures, CPU profiles and game data.
+
+
 ## Launcher and roster import audit (2026-10-18)
 
 The public ISO-only player at main e884741 was verified over HTTPS, including local ISO range reads and 64 MiB guest / 56 MiB user memory. The next package is `build/static-ncaa10-save-audit-20261018`. Its startup card hides inactive game controls, preserves native keyboard activation of the ISO picker, explains Enter/Start, and offers explicit retry for runtime/download/isolation failures. Missing shared-memory support fails before loading the engine. The Pages installer also refuses to overwrite existing provenance.

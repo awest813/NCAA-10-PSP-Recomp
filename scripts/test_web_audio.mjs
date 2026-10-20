@@ -64,6 +64,9 @@ for (const rate of [22050, 44100, 48000, 96000]) {
   push(output, 2048);
   assert(render(output)[0].every(x => x === 0), 'startup must reserve enough audio for callback jitter');
   push(output, 3072);
+  const attack = render(output)[0];
+  assert(attack[0] > 0 && attack[0] < 0.01, 'startup ramps in without a full-scale step');
+  render(output);
   assert(render(output)[0].every(x => x === 0.25));
   // Simulate ten seconds of PSP production, with bursts every three host
   // audio blocks and varying chunk lengths. Check rate conversion and drift.
@@ -84,12 +87,16 @@ for (const rate of [22050, 44100, 48000, 96000]) {
   assert.equal(output.frames, 0);
   assert.equal(output.pos, 0);
   assert.equal(output.drift, 0);
-  assert(render(output)[0].every(x => x === 0), 'reset must discard stale samples');
+  for (let i = 0; i < 2; ++i) render(output);
+  assert(render(output)[0].every(x => x === 0), 'reset discards stale samples after its bounded fade');
   assert.equal(output.under, 0, 'intentional silence is not an underrun');
   push(output, 5120, 0.5);
+  assert(render(output)[0][0] < 0.02, 'resume ramps in fresh audio');
+  render(output);
   assert(render(output)[0].every(x => x === 0.5), 'resume primes fresh audio');
   for (let i = 0; i < rate / 128; ++i) render(output);
   assert.equal(output.under, 1, 'one starvation event, rather than one event per silent sample');
+  assert.equal(output.drift, 0, 'starvation discards stale clock correction before re-priming');
   assert.equal(output.frames, 0);
   assert.equal(output.pos, 0);
   push(output, 11000);
@@ -127,18 +134,42 @@ assert.equal(trimmed.frames,6000);
 assert.equal(trimmed.dropped,remaining,'trimming must count source frames, not fractional phase');
 assert.equal(trimmed.over,1);
 
+// Interruptions must retain honest starvation/drop counts while avoiding the
+// full-scale steps that turn a brief scheduling gap into an audible click.
+for (const rate of [22050, 44100, 48000, 96000]) {
+  const output = new Output({ processorOptions: { rate } });
+  push(output, 5120, 0.75);
+  let previous = 0, largest = 0;
+  const check = () => { for (const x of render(output)[0]) { largest = Math.max(largest, Math.abs(x-previous)); previous=x; } };
+  for (let i = 0; i < rate / 128; ++i) check();
+  assert.equal(output.under, 1);
+  assert.equal(previous, 0);
+  push(output, 5120, -0.75); check(); check();
+  push(output, 30000, 0.75); check(); check();
+  assert.equal(output.over, 1);
+  assert(output.dropped > 0);
+  output.port.onmessage({data:{reset:true}}); check(); check();
+  assert.equal(previous, 0);
+  push(output, 5120, 0.75); check(); check();
+  output.port.onmessage({data:{reset:true}});
+  push(output, 5120, -0.75); check(); check();
+  assert(largest < 0.04, `bounded startup/starvation/recovery/overrun/reset step at ${rate}: ${largest}`);
+}
+
 // Exercise actual context creation and stats delivery with a 48 kHz device.
 // A stalled render thread must not be mistaken for an overproducing guest.
-let clock = 1000, contextOptions;
+let clock = 1000, contextOptions, rejectModule = false, closed = 0, revoked = 0;
+const audioWarnings = [];
 const audioScope = {
   document:{hidden:false}, sound:{context:null,muted:false}, WORKLET:scope.WORKLET,
   window:{AudioContext:class {
-    constructor(options) {contextOptions=options; this.sampleRate=48000; this.audioWorklet={addModule:async()=>{}};}
+    constructor(options) {contextOptions=options; this.sampleRate=48000; this.audioWorklet={addModule:async()=>{if(rejectModule)throw Error('worklet load failed');}};}
     createGain() {return {gain:{value:0},connect(){}};}
+    async close() {++closed;}
   },AudioWorkletNode:true},
   AudioWorkletNode:class {constructor(){this.port={};} connect(gain){return gain;}},
-  URL:{createObjectURL(){return 'blob:test';}},Blob:class {},
-  performance:{now:()=>clock}, console,
+  URL:{createObjectURL(){return 'blob:test';},revokeObjectURL(){++revoked;}},Blob:class {},
+  performance:{now:()=>clock}, console:{warn(...args){audioWarnings.push(args);}},
 };
 vm.runInNewContext(html.slice(html.indexOf('  function startSound()'),html.indexOf("  ['pointerup'")),audioScope);
 audioScope.startSound(); await Promise.resolve();
@@ -153,4 +184,20 @@ assert.equal(audioScope.sound.stats.inputHz,undefined,'reset counters must not y
 clock+=1000; stats(44100,48000);
 assert.equal(audioScope.sound.stats.inputHz,44100);
 assert.equal(audioScope.sound.stats.renderHz,48000);
-console.log('PASS: focus/startup guards, stereo/chunk boundaries, 22.05/44.1/48/96 kHz, drift, reset/starvation recovery, bounded queue with exact drop counts, device-native graph selection and wall-time producer/render diagnostics');
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(revoked,1,'release the worklet Blob URL after loading');
+audioScope.sound.node.onprocessorerror(Error('processor failed'));
+assert.equal(audioScope.sound.context,null,'failed processors permit a fresh gesture retry');
+assert.equal(audioScope.sound.node,null);
+assert.equal(closed,1);
+rejectModule=true;
+audioScope.startSound(); await new Promise(resolve => setImmediate(resolve));
+assert.equal(audioScope.sound.context,null,'failed worklet loading must not permanently disable audio');
+assert.equal(revoked,2);
+assert.equal(closed,2);
+rejectModule=false;
+audioScope.startSound(); await new Promise(resolve => setImmediate(resolve));
+assert(audioScope.sound.node,'a subsequent gesture recreates audio');
+assert.equal(revoked,3);
+assert.equal(audioWarnings.length,2,'both failure paths explain that interaction can retry');
+console.log('PASS: focus/startup guards, stereo/chunk boundaries, 22.05/44.1/48/96 kHz, drift, 2 ms de-click transitions, reset/starvation recovery, bounded queue with exact drop counts, device-native graph selection and wall-time producer/render diagnostics');

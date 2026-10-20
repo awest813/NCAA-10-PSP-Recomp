@@ -1,5 +1,7 @@
 # NCAA remaining gaps and acceptance checks
 
+Audio recovery polish (2026-10-20): bounded two-millisecond transitions reduce tested sample discontinuities and failed worklets can retry on interaction. Loading starvation and variable graphics/presentation timing remain open; fresh-browser observations and resolution experiments are in [the audio/pacing audit](AUDIO_PACING.md).
+
 Updated 2026-10-14. Target: NCAA Football 10 PSP US, ULUS10440, AOT C++/WebAssembly. Default guest RAM is 64 MiB, with a 56 MiB user partition. This checklist tracks evidence, not a promise of full compatibility.
 
 Latest rendering acceptance uses pinned hardware-tested PPSSPP CI `61e60ee6ff`. GPU fixed UV/fog planes and span LOD improve or retain all fourteen full/prefix MAEs and fixed ROIs against `4caa0ba`. Full SDSU/GT MAE is **0.008749 / 0.013225**; five early SDSU cases and prefix-40 raw RGB match exactly. Arithmetic, GPU record lifetime, native/web/package checks pass. Latest package: **`build/static-ncaa10-fixed-planes-final`**. Native replay has a measured accuracy cost and does not establish browser FPS. Fresh browser gameplay/audio/FPS awaits access. See [handoff](../HANDOFF.md#fixed-point-uvfog-planes-and-span-lod-checkpoint-2026-10-14) and [reference evidence](PPSSPP_REFERENCE.md).
