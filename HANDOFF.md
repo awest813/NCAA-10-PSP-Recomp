@@ -1,5 +1,9 @@
 # NCAA Football 10 PSP Web Recomp — handoff
 
+## README refresh (2026-10-21)
+
+README.md now starts with the hosted ISO-only player, controls, saves and current limits, then documents source builds and hosting. The fresh-checkout anchor is preserved. The unsupported actual-disc translator path is explicitly excluded from setup guidance. Seven Pages assembly tests, strict player-layout assembly and local README heading-link checks pass; see the engineering log. This documentation change does not update the deployed player or runtime baseline below.
+
 ## Audio recovery and pacing audit (2026-10-20)
 
 Current package: `build/static-ncaa10-audio-polish-20261020`. AudioWorklet starvation, reset, re-prime and overrun splices now use bounded two-millisecond transitions; stale drift correction clears on starvation. The 100 ms target, 250 ms cap, exact drops and starvation counters remain. At 48 kHz the deterministic opposite-polarity interruption test's peak adjacent sample step falls from 1.5 to 0.015625, with identical starvation/overrun/drop results. Load/processor failure closes the failed graph, releases its Blob URL and allows another user gesture to retry; rejected resumes are handled.

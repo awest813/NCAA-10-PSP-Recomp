@@ -1,38 +1,64 @@
 # NCAA Football 10 PSP Web Recomp
 
-For the unified ISO-only launcher, see [Static hosting](docs/STATIC_HOSTING.md). After building NCAA, `python scripts/prepare_static_ncaa.py --output build/static-ncaa10` prepares a self-contained web folder. Serve that folder, select a matching US ISO, then press **Enter for Start**. Players need no build import, translator or developer tools. The package includes the game-specific compiled build and verified boot preload; the ISO stays local. Browser isolation is prepared before file selection, and the engine downloads only after disc validation.
+Play **NCAA Football 10 for PSP (US, ULUS10440)** in a web browser using your own disc image. The game's Allegrex executable is translated ahead of time to C++, compiled to WebAssembly, and linked with a PSP host runtime and WebGL2 renderer. Gameplay executes the original game code without a guest CPU interpreter or JIT.
 
-This working project targets **NCAA Football 10 for PSP, US release ULUS10440**, running in the browser. Its decrypted Allegrex/MIPS executable is statically translated into C++, compiled to WebAssembly, and linked with the PSP kernel and WebGL2 graphics implementation in this project. It runs the game's own code and assets; gameplay does not use a PSP CPU interpreter or JIT.
+**[Open the player](https://awest813.github.io/NCAA-10-PSP-Recomp/)** · [NCAA guide](docs/NCAA10.md) · [Known gaps](docs/REMAINING_GAPS.md) · [Build from source](#build-ncaa-from-a-fresh-checkout)
 
-The NCAA native and web builds default to **64 MiB guest RAM** with a 56 MiB user partition. `?ram=32` selects the original layout for comparison. UK–FSU kickoff and manually snapped scrimmage gameplay have been verified. Full rendering accuracy, sustained frame pacing, uninterrupted audio, and complete mode coverage remain work in progress.
+## Play
 
-The build checks the disc metadata and exact decrypted executable before linking `profile/generated/ncaa10` and the NCAA audio corpus. The internal module name `NCAA2007` belongs to this verified Football 10 executable. It does not select a different game.
+1. Open the [hosted player](https://awest813.github.io/NCAA-10-PSP-Recomp/) in a browser with WebGL2 and shared-memory support. Chrome on Windows is the current verified gameplay baseline.
+2. Choose an **uncompressed US NCAA Football 10 PSP ISO** matching `ULUS10440` and the supported executable revision. The picker does not accept ZIP, CSO or ZSO files.
+3. Wait for validation and startup, then press **Enter for Start**. Follow the title and first-run prompts, choose **Play Now**, confirm the teams and controller, and allow the stadium to load.
 
-Run commands from the repository root, where `scripts` and `profile` live. In the original local workspace this is the inner `psp-web-recomp-main` folder. If you already have a build, serve it with:
+The ISO stays on your device. The player reads requested file and sector ranges locally; it does not upload or copy the whole disc into WebAssembly memory. Select the ISO again after reloading the page.
 
-```powershell
-python scripts/serve.py build/web-ncaa10/profiles/web 8621 --mount /disc=games/ncaa10/root/disc
-```
+The site supplies a prepared, game-specific WebAssembly engine and verified boot preload from a hash-pinned release. It hosts no ISO, extracted disc tree or saves. Players do not need a compiler or build-folder import. Release provenance is recorded in [PAGES_PLAYER.json](docs/PAGES_PLAYER.json); source updates and deployed engine updates are tracked separately.
 
-Open <http://127.0.0.1:8621/> and press **Enter for Start**. See the [NCAA guide](docs/NCAA10.md) for building and controls.
+### Controls
 
-| Document | Purpose |
+| Keyboard | PSP input |
 | --- | --- |
-| [Engineering log](ENGINEERING_LOG.md) | Verified identity, engineering milestones, evidence and unresolved defects |
-| [Handoff](HANDOFF.md) | Resume the current build, tests, saves and debugging work |
-| [Agent instructions](AGENTS.md) | Rules for future work on this NCAA port |
-| [Helping other recomps](OTHER_RECOMPS.md) | Reusable fixes, test methods and contribution guidance |
-| [GitHub publication](GITHUB_READY.md) | Published source, snapshot and contribution instructions for awest813/NCAA-10-PSP-Recomp |
+| Enter | Start |
+| Z / X / A / S | Cross / Circle / Square / Triangle |
+| Arrow keys | D-pad |
+| I / J / K / L | Analog up / left / down / right |
+| Q / W | L / R |
+| Shift | Select |
 
-The [GitHub Pages homepage](https://awest813.github.io/NCAA-10-PSP-Recomp/) is the ISO-only player. Choose your matching US ISO and press Enter for Start. The compiled runtime and verified boot preload come from a hash-pinned release; the site hosts no ISO, extracted disc assets or saves. Project documentation is at [project.html](https://awest813.github.io/NCAA-10-PSP-Recomp/project.html). The optional [build importer](https://awest813.github.io/NCAA-10-PSP-Recomp/play/) remains available for developer builds; see [Static hosting](docs/STATIC_HOSTING.md).
+At kickoff, Z selects **Kickoff Middle**. Hold K briefly to pull the analog stick back, then I to push forward and kick. Analog keys move the selected player during regular play. See the [match walkthrough](docs/NCAA10.md#controls-and-path-into-a-match) for the first-run menu sequence.
 
-Attribution and dependency licenses are summarized in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+The web shell also provides gamepad and touch controls. Physical controller, Bluetooth and mobile-device coverage remain incomplete.
 
-A fresh clone contains source only. Game files, generated translations, build outputs and saves are excluded by `.gitignore`.
+### Saves and rosters
+
+Progress persists in browser storage for the site's origin. Use **Export saves** to download a backup ZIP and **Import saves** to restore a compatible archive. Export before clearing site data or moving between domains, ports, browser profiles or devices.
+
+The runtime does not decrypt PSP saves. Encrypted saves or rosters copied from a PSP or PPSSPP require a decrypted copy; recognizable encrypted NCAA save pairs are rejected before import changes existing savedata. Imports validate ZIP integrity and paths, then report success after storage confirms persistence.
+
+## Current status
+
+Actual browser play has been verified beyond menus: stadium loading, coin toss, kickoff and returns, offensive and defensive scrimmage, and subsequent play selection. A separate run reached postgame using Super Sim for part of the match. These checks do not establish complete mode or season coverage.
+
+| Area | Verified state and remaining limits |
+| --- | --- |
+| Memory | NCAA defaults to **64 MiB guest RAM / 56 MiB user partition** in native and web builds. `?ram=32` enables comparison with the original layout; the diagnosed 32 MiB fragmentation failure remains open. |
+| Performance | Observed gameplay cadence is about **30 presented FPS at 100% simulation speed** on the tested Windows machine. Loading and presentation stalls remain. A 60 Hz Vblank is distinct from the game's presented frame rate. |
+| Graphics | WebGL2 renders gameplay with ongoing GE accuracy work. Selected reference comparisons and synthetic regressions do not establish full PSP fidelity. |
+| Audio | Music, speech and effects run through the host audio path. Recovery transitions were improved in the October 20 audit; startup starvation and uninterrupted audio remain unresolved. |
+| Compatibility | The supported target is the verified US executable. Other revisions, all game modes, long sessions and broad browser/device coverage are not established. |
+| Video | The optional NCAA intro movie is skipped; AVC playback is not implemented. |
+
+The [NCAA guide](docs/NCAA10.md#validation-and-current-limits), [audio and pacing audit](docs/AUDIO_PACING.md), and [remaining gaps](docs/REMAINING_GAPS.md) explain the evidence and its limits. The October 20 Chrome audit reached kickoff and subsequent play selection with a sampled median of 29.5 FPS in its final 45-second window; startup/loading had already incurred audio underruns. This is a local observation, not a performance guarantee.
 
 ## Build NCAA from a fresh checkout
 
-Install Git, Python 3.10 or newer, CMake, Ninja and a C++20 compiler. Windows users need Git Bash for setup and Clang on PATH. Run:
+A fresh clone contains source only. Supply your own matching US disc and verified decrypted executable. Game files, generated translations, builds and savedata are excluded from version control.
+
+Run all commands from the repository root containing `scripts` and `profile`. In the original local workspace, that is the inner `psp-web-recomp-main` directory.
+
+### 1. Install dependencies and set up the compiler
+
+Install Git, Python 3.10+, CMake, Ninja and a C++20 compiler. Windows setup uses Git Bash and requires Clang on `PATH`.
 
 ```bash
 git clone https://github.com/awest813/NCAA-10-PSP-Recomp.git
@@ -40,112 +66,107 @@ cd NCAA-10-PSP-Recomp
 bash scripts/setup.sh
 ```
 
-Setup fetches the pinned PSPRecomp revision, applies all seven patches, links this profile and installs Emscripten 6.0.10. Supply your own US disc (`ULUS10440`) and the matching decrypted `EBOOT.BIN`; the executable hash is in the [NCAA guide](docs/NCAA10.md#verified-game-identity). Place the decrypted file at `games/ncaa10/root/EBOOT.BIN`, creating those directories first. A retail encrypted executable cannot be used directly, but the [browser translator](https://awest813.github.io/NCAA-10-PSP-Recomp/play/translate/) can produce that file and the generated C++ from your ISO, and `scripts/build_translator.sh` builds the same decrypter natively as `build/translator-native/pspweb_prx_decrypt`, usable as `PSP_DECRYPT`. See [Static hosting](docs/STATIC_HOSTING.md#translator).
+Setup fetches the pinned [PSPRecomp](https://github.com/jessicanataliagta/PSPRecomp) revision, applies seven patches, links this project's profile, installs Emscripten 6.0.10 under `tools/emsdk`, and builds the native compiler tools.
 
-On Windows, from PowerShell in the repository root:
+### 2. Supply the verified executable
+
+Create `games/ncaa10/root` and place the matching **decrypted** executable at:
+
+```text
+games/ncaa10/root/EBOOT.BIN
+```
+
+The supported file is 8,415,696 bytes with SHA-256:
+
+```text
+2b743dc6d746d822969a9b967b13422a369ff03c6a3a3e2604e051c1642b94f6
+```
+
+A retail encrypted `EBOOT.BIN` cannot be used directly. PPSSPP can dump a decrypted executable through its developer tools; see [verified game identity](docs/NCAA10.md#verified-game-identity). The ELF's internal module name, `NCAA2007`, belongs to this Football 10 executable.
+
+**The experimental browser translator is not a supported way to prepare this disc.** The actual-disc audit rejected encryption tag `0xC0CB167C`. Its synthetic tests do not establish retail compatibility, and compiling a playable game engine in the browser is not implemented. See [translator status](docs/STATIC_HOSTING.md#translator).
+
+### 3. Build and run
+
+On **Windows**, run from PowerShell:
 
 ```powershell
 ./scripts/build_ncaa_web.ps1 -Iso 'C:/path/to/NCAA-Football-10.iso' -Emsdk ./tools/emsdk -Generate -Serve
 ```
 
-On Linux, from Bash:
+This extracts the disc as needed, verifies the exact title and executable, prepares raw UMD reads, generates both the main executable and EA audio corpora, and builds the web target. `-Serve` then creates a fresh static package and serves its ISO-only launcher. Open [localhost:8621](http://127.0.0.1:8621/), select the ISO and press Enter.
+
+For subsequent incremental builds, omit `-Generate`. Use `-StaticOutput build/my-new-launcher` to choose a new package directory. Existing package directories are preserved.
+
+On **Linux**, with the verified decrypted executable already in place:
 
 ```bash
 scripts/port.sh ncaa10 '/path/to/NCAA-Football-10.iso'
-scripts/serve.sh ncaa10 8621
+python3 scripts/prepare_static_ncaa.py --output build/static-ncaa10
+python3 scripts/serve.py build/static-ncaa10 8621
 ```
 
-The NCAA path verifies the executable and disc metadata, generates both executable and EA audio code, and prepares the raw UMD image used by sector reads. An ISO or a ZIP containing one ISO is supported. The Bash workflow also accepts an extracted-directory source containing `__umd.iso`. Existing raw images are checked by SHA-256 and preserved on a mismatch. Open <http://127.0.0.1:8621/> and press **Enter for Start**.
+Open [localhost:8621](http://127.0.0.1:8621/) and select the ISO. Choose a new output directory when packaging again. Windows gameplay is the verified baseline; first-time Linux setup and a full Linux game build still need end-to-end validation. macOS is untested here.
 
-Windows gameplay is the verified baseline. Source checks and clean compiler reconstruction have local regression coverage; first-time Linux setup and a full Linux game build still need end-to-end validation. The new GitHub workflow checks source, browser helpers and the patched compiler without game data.
+Both build paths verify disc metadata and executable identity before linking NCAA code. They support an ISO or a ZIP containing one ISO as build input; the player picker still requires an uncompressed ISO. Existing raw images are checked by SHA-256 and preserved on mismatch.
 
-## Inherited PSP web runtime
+### Serve an existing development build
 
-The host runtime originated in PSP Web Recomp's God of War ports. The following demo and performance history describe those original titles, not NCAA's current accuracy or frame rate. NCAA's gameplay target is its observed native cadence of about 30 FPS at 100% simulation speed.
+The development server can stream from the local extracted disc instead of asking for an ISO:
 
-<p align="center">
-  <img src="docs/media/demo.webp" alt="God of War: Chains of Olympus running in a browser" width="720">
-  <br>
-  <a href="docs/media/demo.mp4">Watch the full recording (1:46)</a>
-</p>
+```powershell
+python scripts/serve.py build/web-ncaa10/profiles/web 8621 --mount /disc=games/ncaa10/root/disc
+```
 
-The first title brought up this way is God of War: Chains of Olympus. It plays from boot through the menus, cutscenes and combat, at 60 frames per second in the scenes measured so far in Chrome and Firefox on a laptop, at up to four times the PSP's resolution, and on phones with on-screen touch controls. Music, speech and sound effects work. Movies are skipped for now.
+Keep the extracted disc and `disc/__umd.iso` in place. Check for an existing server before reusing its port. Full build and native diagnostic details are in the [NCAA guide](docs/NCAA10.md) and [handoff](HANDOFF.md).
 
-God of War: Ghost of Sparta followed through the same scripts. It needed the PSP's DRM decryption for one small file, a handful of system calls and a lighting fix, and no performance work: it runs at 55 to 60 frames per second at three times the native resolution.
+## Host your own player
 
-The original local NCAA workspace already has an extracted disc and decrypted executable. Those files are absent from GitHub clones.
+After building, prepare a new static package and preview it:
+
+```powershell
+python scripts/prepare_static_ncaa.py --output build/static-ncaa10
+python scripts/serve.py build/static-ncaa10 8622
+```
+
+Publish the package contents together on an HTTPS static host. The package contains compiled NCAA code and a verified boot preload; it contains no ISO or savedata. Keep game-derived outputs outside the Git source tree.
+
+Threaded WebAssembly requires cross-origin isolation. `scripts/serve.py` supplies the headers locally; the static package includes a service-worker fallback for hosts without configurable headers. Use HTTPS or localhost, allow service workers where needed, and serve `.wasm` as `application/wasm`. Opening `index.html` directly from disk does not work.
+
+See [Static hosting](docs/STATIC_HOSTING.md) for headers, deployment, package verification and the optional developer build importer.
 
 ## How it works
 
-**Recompilation.** [PSPRecomp](https://github.com/jessicanataliagta/PSPRecomp) analyses the decrypted executable, finds its functions and emits C++ for them in translation units of 16 KiB of guest code each. That code runs against a register file and a model of the PSP's memory. This project adds a handful of fixes to PSPRecomp (in `patches/`) and a new target for it, the web profile in `profile/`.
+- **Ahead-of-time code:** PSPRecomp translates the verified executable into C++. EA audio-bank programs have a separate generated corpus, including relocated guest jumps. Emscripten compiles these with the host runtime into WebAssembly.
+- **PSP services:** `profile/host` implements threads, synchronization, memory partitions, file and sector I/O, input, save dialogs and other kernel services used by the game.
+- **Graphics:** the CPU decodes GE display lists and vertex state; the WebGL2 backend handles render targets, textures, blending and presentation. A graphics worker with OffscreenCanvas overlaps GE work with game execution on supported browsers.
+- **Audio:** voice synthesis and ATRAC3/ATRAC3+ decoding feed an AudioWorklet. Buffering and recovery diagnostics track starvation and overruns.
+- **Disc access:** prepared players bridge local ISO ranges into the disc cache. Development builds can stream extracted files and raw sectors through the local HTTP server.
 
-**A small PSP kernel.** Whatever the game asks of the PSP's operating system is answered by high-level emulation in `profile/host`: cooperative threads with semaphores, event flags and callbacks, memory partitions, the file system (with disc data streamed over HTTP Range requests, so only the executable is downloaded up front), the controller, audio output, saving and loading game progress, message dialogs, and the movie player's bookkeeping. Guest time advances in frames, so a game sees a steady 60 Hz however fast the host runs.
+See [runtime internals](docs/internals.md) for implementation details and [Helping other recomps](OTHER_RECOMPS.md) for reusable fixes and investigation methods.
 
-**Graphics.** The GE, the PSP's graphics chip, is fed display lists. `ge.cpp` decodes them on the CPU, including vertex formats, skinning, lighting, texture generation, clipping and backface culling, and hands batched triangles and render state to `ge_gl.cpp`. There, framebuffers become WebGL render targets keyed by their place in VRAM, so effects that render to a texture and read it back stay on the GPU. Pixel format reinterpretation (games read 32-bit buffers as 16-bit textures and back), the PSP's stencil-in-alpha, fog and block transfers are emulated on the GPU as well, and everything can render at one to four times the native 480×272.
+## Documentation and contributions
 
-**Two threads, like the PSP.** On the PSP the graphics chip works through one frame's display list while the CPU prepares the next, and games are written around that. Here the GE and its WebGL context run on a worker thread with an OffscreenCanvas: queuing a list returns at once and only the explicit sync calls wait. A frame costs whichever thread is busier rather than the sum of both.
+| Document | Use it for |
+| --- | --- |
+| [NCAA guide](docs/NCAA10.md) | Identity, controls, builds and gameplay evidence |
+| [Static hosting](docs/STATIC_HOSTING.md) | Local-ISO packages, Pages deployment and developer tools |
+| [Remaining gaps](docs/REMAINING_GAPS.md) | Open compatibility and accuracy work |
+| [Audio and pacing](docs/AUDIO_PACING.md) | Measured stalls, audio recovery and validation limits |
+| [Handoff](HANDOFF.md) | Current reproducible development state |
+| [Engineering log](ENGINEERING_LOG.md) | Dated changes, checks and evidence |
+| [Agent instructions](AGENTS.md) | Requirements for work in this repository |
+| [GitHub publication](GITHUB_READY.md) | Source publication and contribution workflow |
+| [Helping other recomps](OTHER_RECOMPS.md) | Reusable source fixes and synthetic tests |
 
-**Sound.** Sound effects come from a reimplementation of the PSP's voice synthesizer (32 voices of ADPCM with pitch and ADSR envelopes), music and speech from ATRAC3+ streams decoded with the FFmpeg decoder, and the mix goes to an AudioWorklet.
+Contribute host/compiler fixes, synthetic fixtures and reproducible reports. Preserve title checks, ahead-of-time execution and the NCAA memory defaults. Keep disc assets, generated game translations, game binaries, RAM dumps and saves out of source contributions. Read the agent instructions and handoff before changing the runtime.
 
-## Original God of War performance work
+## Credits and license
 
-The first playable build ran at 6 frames per second. Most of the way to 60 came from finding out where the time actually went rather than from making the renderer faster.
+This port extends [Samir Nuri's PSP Web Recomp](https://github.com/snuri00/psp-web-recomp), originally developed for God of War: Chains of Olympus and Ghost of Sparta. Their bring-up and performance history belongs to those titles; it is separate from NCAA's gameplay evidence.
 
-God of War swaps its framebuffer without waiting for the vertical blank, so with nothing to hold it back the game drew around eight frames for every one that reached the screen. Holding the thread that swaps twice within one blank until the next one, a trick PPSSPP also uses, cut the work per displayed frame by a factor of eight on its own.
+[PSPRecomp](https://github.com/jessicanataliagta/PSPRecomp) supplies the static compiler. PPSSPP and JPCSP research informs hardware behavior; the standalone FFmpeg ATRAC decoder is used under its own license. Emscripten builds the WebAssembly. Attribution and dependency details are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-In WebAssembly, reading the clock through `std::chrono` goes through `clock_gettime` and a BigInt conversion in JavaScript. Profiling timers that read it per primitive took about a third of the frame until they were made to read `performance.now()` only when profiling is on.
+Repository code is available under the [MIT License](LICENSE). The ATRAC decoder retains its [LGPL 2.1-or-later license](profile/third_party/at3_standalone/COPYING.LGPLv2.1) and per-file notices.
 
-Firefox copies every WebGL buffer upload to its GPU process, and after any change to an index buffer it re-validates the whole buffer on the next draw. A shared 4 MB index ring therefore dropped Firefox to 3 frames per second; giving every draw a small index buffer of its own fixed it. The opposite fix, writing vertex data piece by piece into one large buffer, helped no browser and made phones stall, because mobile GPU drivers wait or copy when a buffer the GPU may still be reading is modified.
-
-The PSP keeps its stencil buffer in the framebuffer's alpha channel, and God of War uses it for projected shadows and to limit a blur pass. Mirroring stencil and alpha into each other with full-screen passes was correct but cost 60 million extra pixels per frame at 4×. Tracking which rectangles, which stencil bits and which constant values actually changed brought that down to about 7 million.
-
-Finally, God of War queues each frame's display list and keeps working on the next frame before it waits. Running the GE on its own thread turned the cost of a busy fight from game plus graphics, around 17 ms in Firefox, into the larger of the two, around 10 ms.
-
-## Original Ghost of Sparta bring-up
-
-Ghost of Sparta went from a ZIP to a page through `port.sh` without changes to the scripts or the recompiler, and then waited forever at boot. It opens a 176-byte file with the PSP's DRM flag, hands its key to `sceIoIoctl` and checks what it reads back. The file is in PGD, the format amctrl.prx decrypts with the KIRK crypto engine, and for disc games that comes down to AES-128 with three keys from KIRK's key vault: a CMAC-based check of the header and a counter mode for the data. `profile/host/pgd.cpp` implements it.
-
-The next problem was a white sky, and the menus had the same white haze. Bisecting the draws of one frame led to a cloud layer drawn with lighting on, whose opacity comes from the alpha of the global ambient light, a factor the lighting code had left out. Performance needed no work: a frame costs 6 to 8 ms, as in Chains of Olympus.
-
-## Port a game of your own
-
-The generic upstream workflow below uses git, CMake, Ninja, a C++20 compiler and Python 3 on Linux. The NCAA port also has a tested Windows workflow in [docs/NCAA10.md](docs/NCAA10.md). macOS remains untested here. The native runner needs EGL and OpenGL ES headers (`libegl-dev` and `libgles-dev` on Debian and Ubuntu); the Windows NCAA build uses ANGLE. Disk requirements depend on the title and generated corpus.
-
-```bash
-git clone https://github.com/awest813/NCAA-10-PSP-Recomp.git
-cd NCAA-10-PSP-Recomp
-scripts/setup.sh                                   # PSPRecomp, the patches and the Emscripten SDK
-
-PSP_DECRYPT=/path/to/decrypter scripts/port.sh mygame "My Game.iso"
-scripts/serve.sh mygame                            # http://localhost:8613/
-```
-
-`port.sh` extracts the disc (an ISO, a ZIP containing one, or an already extracted folder), decrypts `PSP_GAME/SYSDIR/EBOOT.BIN`, translates it to C++, writes the manifest for streaming the rest of the disc and builds the page. It takes a few minutes; God of War goes from ZIP to playable page in about four on an 8-core laptop. Add `--native` to also build a headless runner that can dump frames to images and record audio, which is the quickest way to see how far a new game gets.
-
-Executables on retail discs are encrypted. `PSP_DECRYPT` names any tool that is called as `tool <in> <out>` and writes a plain ELF, such as DecEboot, pspdecrypt or this project's `pspweb_prx_decrypt` (retail game tags only; KL4E-compressed executables are not supported). PPSSPP can also dump a decrypted executable while it runs a game (Settings, Tools, Developer tools).
-
-The original runtime's two Ready at Dawn ports share an engine; this workspace adds NCAA's separate EA engine. Success with these titles does not establish compatibility with another game. A new title may encounter an unimplemented system call (logged as `[hle] unimplemented ...`) or an unsupported GE feature. [docs/internals.md](docs/internals.md) and [OTHER_RECOMPS.md](OTHER_RECOMPS.md) describe how to investigate and share reusable fixes.
-
-## Saves
-
-Games save the way they do on a PSP, into `PSP/SAVEDATA` on the memory stick, and the page keeps that folder in the browser's storage for the address you play from, so progress survives a reload. When a game asks you to pick a save slot, the page shows the slots with their icons and descriptions; arrow keys, a gamepad or a tap choose one.
-
-Browser storage can be cleared along with a site's data, and it does not travel between browsers or devices. **Export saves** downloads everything as a ZIP file laid out like the PSP's `SAVEDATA` folder, and **Import saves** adds the saves from such a file. Saves copied from a real PSP or from PPSSPP are usually encrypted and will not load yet. Imports wait for game startup, validate ZIP integrity and safe paths before writing, and report success after browser storage confirms persistence. Unsupported or corrupt archives leave existing files unchanged; keep an exported backup.
-
-## Hosting
-
-The page uses SharedArrayBuffer for its threads, so it has to be served cross-origin isolated, with `Cross-Origin-Opener-Policy: same-origin` and `Cross-Origin-Embedder-Policy: require-corp`. `scripts/serve.py` sends both headers and supports the Range requests the disc streaming relies on. To try it on a phone, put a tunnel in front of it, for example `cloudflared tunnel --url http://127.0.0.1:8613`, which passes the headers through. Anyone with the address can load the game while the tunnel runs, so keep it to yourself and stop it when you are done.
-
-Browsers that cannot draw WebGL2 on an OffscreenCanvas fall back to a single thread automatically; `?threads=0` forces that, and `?profile` adds a per-frame timing breakdown to the status bar.
-
-## Legal
-
-The source project contains host code, PSPRecomp patches and third-party code under their respective licenses. Local disc files, generated game C++ and built game WebAssembly are excluded from version control. Keep those game-derived files local and share source fixes and synthetic tests. Use disc images of games you own. This project is not affiliated with or endorsed by EA, the NCAA, Sony or any game publisher.
-
-## Credits
-
-PSPRecomp by its contributors (MIT) does the static recompilation. PPSSPP and JPCSP documented much of the hardware behavior emulated here, and PPSSPP's standalone copy of FFmpeg's ATRAC3/ATRAC3+ decoder is used for music and speech (LGPL 2.1 or later, in `profile/third_party/at3_standalone`). Emscripten builds the WebAssembly.
-
-## License
-
-The code in this repository is available under the MIT License, see [LICENSE](LICENSE). `profile/third_party/at3_standalone` keeps its LGPL 2.1 license.
+Use disc images of games you own. This project is not affiliated with or endorsed by EA, the NCAA, Sony or any game publisher.
